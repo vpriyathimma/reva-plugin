@@ -1,66 +1,56 @@
 import { Request, Response } from 'express';
 import axios from 'axios';
 import { issueConnectorToken } from './token';
+import { stateStore } from './authorize';
 
 export async function callback(req: Request, res: Response) {
   const { code, state } = req.query;
-  const session = req.session as any;
 
-  // Validate state to prevent CSRF
-  if (!state || state !== session.oauthState) {
-    return res.status(400).json({ error: 'Invalid state parameter' });
-  }
+  const stateContext = state ? stateStore.get(state as string) : null;
+  if (state) stateStore.delete(state as string);
 
   try {
-    // Exchange code with Okta for tokens
+    // Exchange code — using default auth server
     const tokenResponse = await axios.post(
-      `https://${process.env.OKTA_DOMAIN}/oauth2/v1/token`,
+      `https://${process.env.OKTA_DOMAIN}/oauth2/default/v1/token`,
       new URLSearchParams({
-        grant_type:   'authorization_code',
-        code:         code as string,
-        redirect_uri: process.env.OKTA_REDIRECT_URI!,
-        client_id:    process.env.OKTA_CLIENT_ID!,
+        grant_type:    'authorization_code',
+        code:          code as string,
+        redirect_uri:  process.env.OKTA_REDIRECT_URI!,
+        client_id:     process.env.OKTA_CLIENT_ID!,
         client_secret: process.env.OKTA_CLIENT_SECRET!,
       }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
 
-    const { access_token, id_token } = tokenResponse.data;
+    const { access_token } = tokenResponse.data;
 
-    // Get user info from Okta
+    // Get user info — using default auth server
     const userInfo = await axios.get(
-      `https://${process.env.OKTA_DOMAIN}/oauth2/v1/userinfo`,
+      `https://${process.env.OKTA_DOMAIN}/oauth2/default/v1/userinfo`,
       { headers: { Authorization: `Bearer ${access_token}` } }
     );
 
     const { email, name, groups } = userInfo.data;
 
-    // Bind user identity to cowork instance
     const connectorPayload = {
       email,
       name,
-      groups: groups || [],
-      coworkClientId:  session.coworkClientId,
-      coworkRedirectUri: session.coworkRedirectUri,
-      requestedScopes: session.requestedScopes,
-      enrolledAt: new Date().toISOString(),
+      groups:            groups || [],
+      coworkClientId:    stateContext?.coworkClientId || '',
+      coworkRedirectUri: stateContext?.coworkRedirectUri || '',
+      requestedScopes:   stateContext?.requestedScopes || '',
+      enrolledAt:        new Date().toISOString(),
     };
 
-    // Issue Reva connector token
     const connectorToken = issueConnectorToken(connectorPayload);
 
-    // Store identity in session for discovery phase
-    session.user = { email, name, groups };
-    session.connectorToken = connectorToken;
-
-    // If Cowork redirect URI provided, redirect back to Cowork
-    if (session.coworkRedirectUri) {
+    if (stateContext?.coworkRedirectUri) {
       return res.redirect(
-        `${session.coworkRedirectUri}?token=${connectorToken}&state=${session.oauthState}`
+        `${stateContext.coworkRedirectUri}?token=${connectorToken}&state=${state}`
       );
     }
 
-    // Direct install — return token as JSON
     return res.json({
       status:          'connected',
       email,
@@ -71,6 +61,6 @@ export async function callback(req: Request, res: Response) {
 
   } catch (err: any) {
     console.error('OAuth callback error:', err.response?.data || err.message);
-    return res.status(500).json({ error: 'Authentication failed' });
+    return res.status(500).json({ error: 'Authentication failed', detail: err.message });
   }
 }
