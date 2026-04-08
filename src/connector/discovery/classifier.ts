@@ -44,6 +44,22 @@ function classifyDomain(serverName: string, serverUrl: string): Domain {
   return 'unknown';
 }
 
+// ── Domain-only sensitivity (for stdio — no tool list available) ──
+const DOMAIN_ONLY_SENSITIVITY: Record<Domain, Sensitivity> = {
+  email:                'medium',
+  project_management:   'low',
+  code_repository:      'high',
+  cloud_infrastructure: 'high',
+  financial_data:       'high',
+  database:             'high',
+  messaging:            'medium',
+  crm:                  'medium',
+  calendar:             'low',
+  file_storage:         'medium',
+  identity:             'critical',
+  unknown:              'medium',
+};
+
 // ── Layer 2: Action classifier ────────────────────────────────────
 type Action =
   | 'read'
@@ -78,130 +94,58 @@ type SensitivityMatrix = Record<Domain, Record<Action, Sensitivity>>;
 
 const MATRIX: SensitivityMatrix = {
   email: {
-    read:       'low',
-    write:      'medium',
-    modify:     'medium',
-    destroy:    'high',
-    distribute: 'high',
-    execute:    'high',
-    govern:     'medium',
-    unknown:    'medium',
+    read: 'low', write: 'medium', modify: 'medium', destroy: 'high',
+    distribute: 'high', execute: 'high', govern: 'medium', unknown: 'medium',
   },
   project_management: {
-    read:       'low',
-    write:      'low',
-    modify:     'low',
-    destroy:    'medium',
-    distribute: 'low',
-    execute:    'medium',
-    govern:     'medium',
-    unknown:    'low',
+    read: 'low', write: 'low', modify: 'low', destroy: 'medium',
+    distribute: 'low', execute: 'medium', govern: 'medium', unknown: 'low',
   },
   code_repository: {
-    read:       'medium',
-    write:      'high',
-    modify:     'high',
-    destroy:    'critical',
-    distribute: 'medium',
-    execute:    'critical',
-    govern:     'high',
-    unknown:    'medium',
+    read: 'medium', write: 'high', modify: 'high', destroy: 'critical',
+    distribute: 'medium', execute: 'critical', govern: 'high', unknown: 'medium',
   },
   cloud_infrastructure: {
-    read:       'high',
-    write:      'high',
-    modify:     'high',
-    destroy:    'critical',
-    distribute: 'critical',
-    execute:    'critical',
-    govern:     'high',
-    unknown:    'high',
+    read: 'high', write: 'high', modify: 'high', destroy: 'critical',
+    distribute: 'critical', execute: 'critical', govern: 'high', unknown: 'high',
   },
   financial_data: {
-    read:       'high',
-    write:      'high',
-    modify:     'high',
-    destroy:    'critical',
-    distribute: 'critical',
-    execute:    'critical',
-    govern:     'critical',
-    unknown:    'high',
+    read: 'high', write: 'high', modify: 'high', destroy: 'critical',
+    distribute: 'critical', execute: 'critical', govern: 'critical', unknown: 'high',
   },
   database: {
-    read:       'high',
-    write:      'critical',
-    modify:     'critical',
-    destroy:    'critical',
-    distribute: 'high',
-    execute:    'critical',
-    govern:     'high',
-    unknown:    'high',
+    read: 'high', write: 'critical', modify: 'critical', destroy: 'critical',
+    distribute: 'high', execute: 'critical', govern: 'high', unknown: 'high',
   },
   messaging: {
-    read:       'low',
-    write:      'medium',
-    modify:     'medium',
-    destroy:    'medium',
-    distribute: 'high',
-    execute:    'medium',
-    govern:     'medium',
-    unknown:    'low',
+    read: 'low', write: 'medium', modify: 'medium', destroy: 'medium',
+    distribute: 'high', execute: 'medium', govern: 'medium', unknown: 'low',
   },
   crm: {
-    read:       'medium',
-    write:      'medium',
-    modify:     'medium',
-    destroy:    'high',
-    distribute: 'high',
-    execute:    'high',
-    govern:     'high',
-    unknown:    'medium',
+    read: 'medium', write: 'medium', modify: 'medium', destroy: 'high',
+    distribute: 'high', execute: 'high', govern: 'high', unknown: 'medium',
   },
   calendar: {
-    read:       'low',
-    write:      'low',
-    modify:     'low',
-    destroy:    'low',
-    distribute: 'medium',
-    execute:    'low',
-    govern:     'low',
-    unknown:    'low',
+    read: 'low', write: 'low', modify: 'low', destroy: 'low',
+    distribute: 'medium', execute: 'low', govern: 'low', unknown: 'low',
   },
   file_storage: {
-    read:       'medium',
-    write:      'medium',
-    modify:     'medium',
-    destroy:    'high',
-    distribute: 'high',
-    execute:    'high',
-    govern:     'medium',
-    unknown:    'medium',
+    read: 'medium', write: 'medium', modify: 'medium', destroy: 'high',
+    distribute: 'high', execute: 'high', govern: 'medium', unknown: 'medium',
   },
   identity: {
-    read:       'high',
-    write:      'critical',
-    modify:     'critical',
-    destroy:    'critical',
-    distribute: 'critical',
-    execute:    'critical',
-    govern:     'critical',
-    unknown:    'high',
+    read: 'high', write: 'critical', modify: 'critical', destroy: 'critical',
+    distribute: 'critical', execute: 'critical', govern: 'critical', unknown: 'high',
   },
   unknown: {
-    read:       'medium',
-    write:      'high',
-    modify:     'high',
-    destroy:    'critical',
-    distribute: 'high',
-    execute:    'critical',
-    govern:     'high',
-    unknown:    'medium',
+    read: 'medium', write: 'high', modify: 'high', destroy: 'critical',
+    distribute: 'high', execute: 'critical', govern: 'high', unknown: 'medium',
   },
 };
 
 // ── Main classifier ───────────────────────────────────────────────
 function classifyTool(tool: DiscoveredTool): { sensitivity: Sensitivity; reason: string } {
-  // Layer 3 override: server-declared sensitivity from metadata endpoint
+  // Override: server-declared sensitivity from metadata endpoint
   if (tool.preset_sensitivity) {
     return {
       sensitivity: tool.preset_sensitivity as Sensitivity,
@@ -209,7 +153,7 @@ function classifyTool(tool: DiscoveredTool): { sensitivity: Sensitivity; reason:
     };
   }
 
-  // Unreachable servers — default medium until scanned
+  // Unreachable servers
   if (tool.server_type === 'unreachable') {
     return {
       sensitivity: 'medium',
@@ -217,8 +161,18 @@ function classifyTool(tool: DiscoveredTool): { sensitivity: Sensitivity; reason:
     };
   }
 
-  // Stdio servers — derive from tool name only (no URL context)
   const domain = classifyDomain(tool.server_name, tool.server_url);
+
+  // Stdio: tool list not available — use domain-only sensitivity
+  if (tool.server_type === 'stdio') {
+    const sensitivity = DOMAIN_ONLY_SENSITIVITY[domain];
+    return {
+      sensitivity,
+      reason: `Domain: ${domain} (stdio — individual tools not scannable) → ${sensitivity}`,
+    };
+  }
+
+  // HTTP servers: full domain × action matrix
   const action = classifyAction(tool.tool_name, tool.description);
   const sensitivity = MATRIX[domain][action];
 
