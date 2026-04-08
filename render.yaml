@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: reva-plugin
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: OKTA_DOMAIN
+        sync: false
+      - key: OKTA_CLIENT_ID
+        sync: false
+      - key: OKTA_CLIENT_SECRET
+        sync: false
+      - key: OKTA_REDIRECT_URI
+        sync: false
+      - key: COWORK_CLIENT_ID
+        sync: false
+      - key: COWORK_CLIENT_SECRET
+        sync: false
+      - key: REVA_TES_URL
+        sync: false
+      - key: CEDAR_POLICY_STORE_ID
+        sync: false
+      - key: JWT_SIGNING_SECRET
+        sync: false
+      - key: PORT
+        value: 3000
+      - key: NODE_ENV
+        value: production
