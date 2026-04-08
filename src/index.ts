@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import path from 'path';
 import dotenv from 'dotenv';
 import session from 'express-session';
 
@@ -32,11 +31,8 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'reva-plugin', timestamp: new Date().toISOString() });
 });
 
-// ── Dashboard (React static build) ───────────────────────────────
-const dashboardPath = path.join(__dirname, '../dashboard/dist');
-app.use(express.static(dashboardPath));
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(dashboardPath, 'index.html'));
+app.get('/', (_req, res) => {
+  res.json({ service: 'reva-plugin', status: 'running', version: '1.0.0' });
 });
 
 app.listen(PORT, () => {
