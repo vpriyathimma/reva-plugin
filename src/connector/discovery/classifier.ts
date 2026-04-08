@@ -3,91 +3,234 @@ import { DiscoveredTool } from './toolScanner';
 export type Sensitivity = 'low' | 'medium' | 'high' | 'critical';
 
 export interface ClassifiedTool extends DiscoveredTool {
-  sensitivity:  Sensitivity;
+  sensitivity:        Sensitivity;
   sensitivity_reason: string;
 }
 
-// Pattern sets with explanations
-const CRITICAL = [
-  { pattern: 'delete',      reason: 'Destructive delete operation' },
-  { pattern: 'drop',        reason: 'Destructive drop operation' },
-  { pattern: 'truncate',    reason: 'Destructive truncate operation' },
-  { pattern: 'execute_sql', reason: 'Raw SQL execution' },
-  { pattern: 'run_query',   reason: 'Raw query execution' },
-  { pattern: 'admin',       reason: 'Administrative operation' },
-  { pattern: 'deploy',      reason: 'Deployment operation' },
-  { pattern: 'shutdown',    reason: 'System shutdown operation' },
-  { pattern: 'destroy',     reason: 'Destructive operation' },
-  { pattern: 'approve_loan', reason: 'Financial approval operation' },
-  { pattern: 'transfer',    reason: 'Financial transfer operation' },
+// ── Layer 1: Domain classifier ────────────────────────────────────
+type Domain =
+  | 'email'
+  | 'project_management'
+  | 'code_repository'
+  | 'cloud_infrastructure'
+  | 'financial_data'
+  | 'database'
+  | 'messaging'
+  | 'crm'
+  | 'calendar'
+  | 'file_storage'
+  | 'identity'
+  | 'unknown';
+
+const DOMAIN_PATTERNS: Array<{ patterns: string[]; domain: Domain }> = [
+  { patterns: ['gmail', 'outlook', 'mail', 'email', 'smtp', 'imap'],                          domain: 'email' },
+  { patterns: ['jira', 'linear', 'asana', 'trello', 'monday', 'clickup', 'notion', 'height'], domain: 'project_management' },
+  { patterns: ['github', 'gitlab', 'bitbucket', 'git'],                                        domain: 'code_repository' },
+  { patterns: ['aws', 'gcp', 'azure', 'bedrock', 's3', 'lambda', 'ec2', 'iam', 'cloud'],      domain: 'cloud_infrastructure' },
+  { patterns: ['figi', 'bloomberg', 'credit', 'finance', 'bank', 'payment', 'reva-mcp'],       domain: 'financial_data' },
+  { patterns: ['postgres', 'mysql', 'mongo', 'redis', 'database', 'sql', 'db'],               domain: 'database' },
+  { patterns: ['slack', 'teams', 'discord', 'telegram', 'chat'],                              domain: 'messaging' },
+  { patterns: ['salesforce', 'hubspot', 'crm', 'zendesk', 'intercom'],                        domain: 'crm' },
+  { patterns: ['gcal', 'calendar', 'google-calendar', 'outlook-calendar'],                    domain: 'calendar' },
+  { patterns: ['drive', 'dropbox', 'box', 'onedrive', 'gdrive', 'sharepoint', 'storage'],     domain: 'file_storage' },
+  { patterns: ['okta', 'auth0', 'ldap', 'active-directory', 'identity', 'iam'],               domain: 'identity' },
 ];
 
-const HIGH = [
-  { pattern: 'send',        reason: 'Sends data externally' },
-  { pattern: 'write',       reason: 'Write operation' },
-  { pattern: 'create',      reason: 'Create operation' },
-  { pattern: 'update',      reason: 'Update operation' },
-  { pattern: 'post',        reason: 'Post/publish operation' },
-  { pattern: 'upload',      reason: 'Upload operation' },
-  { pattern: 'modify',      reason: 'Modification operation' },
-  { pattern: 'publish',     reason: 'Publish operation' },
-  { pattern: 'commit',      reason: 'Commit operation' },
-  { pattern: 'merge',       reason: 'Merge operation' },
-  { pattern: 'issue_token', reason: 'Token issuance operation' },
-  { pattern: 'enrich',      reason: 'Token enrichment operation' },
+function classifyDomain(serverName: string, serverUrl: string): Domain {
+  const combined = `${serverName} ${serverUrl}`.toLowerCase();
+  for (const { patterns, domain } of DOMAIN_PATTERNS) {
+    if (patterns.some(p => combined.includes(p))) return domain;
+  }
+  return 'unknown';
+}
+
+// ── Layer 2: Action classifier ────────────────────────────────────
+type Action =
+  | 'read'
+  | 'write'
+  | 'modify'
+  | 'destroy'
+  | 'distribute'
+  | 'execute'
+  | 'govern'
+  | 'unknown';
+
+const ACTION_PATTERNS: Array<{ patterns: string[]; action: Action }> = [
+  { patterns: ['delete', 'remove', 'drop', 'purge', 'destroy', 'truncate', 'archive'],                         action: 'destroy' },
+  { patterns: ['execute', 'run', 'invoke', 'deploy', 'trigger', 'launch', 'start', 'stop', 'restart'],         action: 'execute' },
+  { patterns: ['send', 'publish', 'post', 'share', 'forward', 'broadcast', 'notify', 'email', 'message'],      action: 'distribute' },
+  { patterns: ['approve', 'authorize', 'assign', 'close', 'reject', 'escalate', 'resolve', 'transition'],      action: 'govern' },
+  { patterns: ['update', 'edit', 'modify', 'patch', 'change', 'set', 'put', 'replace', 'rename', 'move'],      action: 'modify' },
+  { patterns: ['create', 'add', 'insert', 'draft', 'new', 'write', 'upload', 'push', 'commit', 'merge'],       action: 'write' },
+  { patterns: ['get', 'read', 'list', 'fetch', 'search', 'find', 'view', 'download', 'export', 'query', 'lookup', 'check', 'score', 'report', 'analyze', 'audit'], action: 'read' },
 ];
 
-const MEDIUM = [
-  { pattern: 'read',        reason: 'Read operation' },
-  { pattern: 'get',         reason: 'Data retrieval' },
-  { pattern: 'fetch',       reason: 'Data fetch' },
-  { pattern: 'list',        reason: 'List operation' },
-  { pattern: 'search',      reason: 'Search operation' },
-  { pattern: 'download',    reason: 'Download operation' },
-  { pattern: 'export',      reason: 'Export operation' },
-  { pattern: 'view',        reason: 'View operation' },
-  { pattern: 'lookup',      reason: 'Lookup operation' },
-  { pattern: 'map',         reason: 'Mapping operation' },
-];
+function classifyAction(toolName: string, description: string): Action {
+  const combined = `${toolName} ${description}`.toLowerCase();
+  for (const { patterns, action } of ACTION_PATTERNS) {
+    if (patterns.some(p => combined.includes(p))) return action;
+  }
+  return 'unknown';
+}
 
-function deriveSensitivity(tool: DiscoveredTool): { sensitivity: Sensitivity; reason: string } {
-  const name    = tool.tool_name.toLowerCase();
-  const desc    = tool.description.toLowerCase();
-  const schema  = JSON.stringify(tool.input_schema || {}).toLowerCase();
-  const combined = `${name} ${desc} ${schema}`;
+// ── Layer 3: Domain × Action sensitivity matrix ───────────────────
+type SensitivityMatrix = Record<Domain, Record<Action, Sensitivity>>;
 
-  // Check critical first
-  for (const c of CRITICAL) {
-    if (combined.includes(c.pattern)) {
-      return { sensitivity: 'critical', reason: c.reason };
-    }
+const MATRIX: SensitivityMatrix = {
+  email: {
+    read:       'low',
+    write:      'medium',
+    modify:     'medium',
+    destroy:    'high',
+    distribute: 'high',
+    execute:    'high',
+    govern:     'medium',
+    unknown:    'medium',
+  },
+  project_management: {
+    read:       'low',
+    write:      'low',
+    modify:     'low',
+    destroy:    'medium',
+    distribute: 'low',
+    execute:    'medium',
+    govern:     'medium',
+    unknown:    'low',
+  },
+  code_repository: {
+    read:       'medium',
+    write:      'high',
+    modify:     'high',
+    destroy:    'critical',
+    distribute: 'medium',
+    execute:    'critical',
+    govern:     'high',
+    unknown:    'medium',
+  },
+  cloud_infrastructure: {
+    read:       'high',
+    write:      'high',
+    modify:     'high',
+    destroy:    'critical',
+    distribute: 'critical',
+    execute:    'critical',
+    govern:     'high',
+    unknown:    'high',
+  },
+  financial_data: {
+    read:       'high',
+    write:      'high',
+    modify:     'high',
+    destroy:    'critical',
+    distribute: 'critical',
+    execute:    'critical',
+    govern:     'critical',
+    unknown:    'high',
+  },
+  database: {
+    read:       'high',
+    write:      'critical',
+    modify:     'critical',
+    destroy:    'critical',
+    distribute: 'high',
+    execute:    'critical',
+    govern:     'high',
+    unknown:    'high',
+  },
+  messaging: {
+    read:       'low',
+    write:      'medium',
+    modify:     'medium',
+    destroy:    'medium',
+    distribute: 'high',
+    execute:    'medium',
+    govern:     'medium',
+    unknown:    'low',
+  },
+  crm: {
+    read:       'medium',
+    write:      'medium',
+    modify:     'medium',
+    destroy:    'high',
+    distribute: 'high',
+    execute:    'high',
+    govern:     'high',
+    unknown:    'medium',
+  },
+  calendar: {
+    read:       'low',
+    write:      'low',
+    modify:     'low',
+    destroy:    'low',
+    distribute: 'medium',
+    execute:    'low',
+    govern:     'low',
+    unknown:    'low',
+  },
+  file_storage: {
+    read:       'medium',
+    write:      'medium',
+    modify:     'medium',
+    destroy:    'high',
+    distribute: 'high',
+    execute:    'high',
+    govern:     'medium',
+    unknown:    'medium',
+  },
+  identity: {
+    read:       'high',
+    write:      'critical',
+    modify:     'critical',
+    destroy:    'critical',
+    distribute: 'critical',
+    execute:    'critical',
+    govern:     'critical',
+    unknown:    'high',
+  },
+  unknown: {
+    read:       'medium',
+    write:      'high',
+    modify:     'high',
+    destroy:    'critical',
+    distribute: 'high',
+    execute:    'critical',
+    govern:     'high',
+    unknown:    'medium',
+  },
+};
+
+// ── Main classifier ───────────────────────────────────────────────
+function classifyTool(tool: DiscoveredTool): { sensitivity: Sensitivity; reason: string } {
+  // Layer 3 override: server-declared sensitivity from metadata endpoint
+  if (tool.preset_sensitivity) {
+    return {
+      sensitivity: tool.preset_sensitivity as Sensitivity,
+      reason:      `Server-declared via x-reva-sensitivity (authoritative)`,
+    };
   }
 
-  // Check high
-  for (const h of HIGH) {
-    if (combined.includes(h.pattern)) {
-      return { sensitivity: 'high', reason: h.reason };
-    }
+  // Unreachable servers — default medium until scanned
+  if (tool.server_type === 'unreachable') {
+    return {
+      sensitivity: 'medium',
+      reason:      'Server unreachable at scan time — defaulting to medium pending rescan',
+    };
   }
 
-  // Check medium
-  for (const m of MEDIUM) {
-    if (combined.includes(m.pattern)) {
-      return { sensitivity: 'medium', reason: m.reason };
-    }
-  }
+  // Stdio servers — derive from tool name only (no URL context)
+  const domain = classifyDomain(tool.server_name, tool.server_url);
+  const action = classifyAction(tool.tool_name, tool.description);
+  const sensitivity = MATRIX[domain][action];
 
-  // Unknown tools from unreachable servers — treat as medium until confirmed
-  if (tool.tool_name.includes('unknown') || tool.tool_name.includes('service')) {
-    return { sensitivity: 'medium', reason: 'Unknown tool — defaulting to medium pending scan' };
-  }
-
-  return { sensitivity: 'low', reason: 'No sensitive patterns detected' };
+  return {
+    sensitivity,
+    reason: `Domain: ${domain} · Action: ${action} → ${sensitivity}`,
+  };
 }
 
 export function classifyTools(tools: DiscoveredTool[]): ClassifiedTool[] {
   return tools.map(tool => {
-    const { sensitivity, reason } = deriveSensitivity(tool);
+    const { sensitivity, reason } = classifyTool(tool);
     return { ...tool, sensitivity, sensitivity_reason: reason };
   });
 }

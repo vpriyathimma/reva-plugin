@@ -2,183 +2,112 @@ import axios from 'axios';
 import { MCPServer } from './configReader';
 
 export interface DiscoveredTool {
-  server_name:  string;
-  server_url:   string;
-  server_type:  string;
-  tool_name:    string;
-  description:  string;
-  input_schema: any;
+  server_name:       string;
+  server_url:        string;
+  server_type:       string;
+  tool_name:         string;
+  description:       string;
+  input_schema:      any;
+  preset_sensitivity?: string;
+  hitl_required?:    boolean;
 }
 
-// ── Streamable HTTP (modern MCP 2025-03-26 spec) ──────────────────
-async function scanStreamableHttp(server: MCPServer): Promise<DiscoveredTool[]> {
-  const response = await axios.post(
-    server.url,
-    { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept':       'application/json, text/event-stream',
-      },
-      timeout: 8000,
-    }
-  );
+// ── Layer 1: RFC 9728 metadata endpoint (public, no auth) ─────────
+// This is the preferred scan method — reads /.well-known/mcp-server-metadata
+// Returns full tool list with sensitivity hints. No credentials needed.
+async function scanMetadataEndpoint(server: MCPServer): Promise<DiscoveredTool[] | null> {
+  try {
+    const base    = server.url.replace(/\/mcp.*$/, '').replace(/\/$/, '');
+    const metaUrl = `${base}/.well-known/mcp-server-metadata`;
 
-  // Handle both direct JSON and SSE-wrapped response
-  let tools = [];
-  if (response.data?.result?.tools) {
-    tools = response.data.result.tools;
-  } else if (typeof response.data === 'string') {
-    // Parse SSE data lines from response
-    const lines = response.data.split('\n');
-    for (const line of lines) {
-      if (line.startsWith('data:')) {
-        try {
-          const parsed = JSON.parse(line.slice(5).trim());
-          if (parsed?.result?.tools) {
-            tools = parsed.result.tools;
-            break;
-          }
-        } catch {}
-      }
-    }
-  }
+    console.log(`[Scanner] Metadata scan: ${server.name} → ${metaUrl}`);
 
-  if (!tools.length) throw new Error('No tools in HTTP response');
-
-  return tools.map((t: any) => ({
-    server_name:  server.name,
-    server_url:   server.url,
-    server_type:  'http',
-    tool_name:    t.name,
-    description:  t.description || '',
-    input_schema: t.inputSchema || {},
-  }));
-}
-
-// ── SSE two-channel protocol (legacy MCP / SecureBank) ────────────
-// Protocol:
-//   1. GET /mcp  → SSE stream, server sends endpoint event
-//   2. POST to that endpoint with tools/list
-//   3. Result arrives back on the SSE stream
-async function scanSSE(server: MCPServer): Promise<DiscoveredTool[]> {
-  const EventSource = require('eventsource');
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      es.close();
-      reject(new Error('SSE scan timeout after 12s'));
-    }, 12000);
-
-    let messageEndpoint = '';
-    let tools: DiscoveredTool[] = [];
-    let toolsRequested = false;
-
-    const es = new EventSource(server.url);
-
-    const done = (result: DiscoveredTool[]) => {
-      clearTimeout(timeout);
-      es.close();
-      resolve(result);
-    };
-
-    const fail = (msg: string) => {
-      clearTimeout(timeout);
-      es.close();
-      reject(new Error(msg));
-    };
-
-    // Handle named 'endpoint' event — MCP sends this first
-    es.addEventListener('endpoint', async (event: any) => {
-      try {
-        let endpoint = event.data?.trim();
-        if (!endpoint) return;
-
-        // Build full URL if relative
-        if (!endpoint.startsWith('http')) {
-          const base = new URL(server.url);
-          endpoint = `${base.protocol}//${base.host}${endpoint}`;
-        }
-
-        messageEndpoint = endpoint;
-
-        if (!toolsRequested) {
-          toolsRequested = true;
-          // POST tools/list to the session endpoint
-          // Response comes back via SSE message event
-          await axios.post(
-            messageEndpoint,
-            { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
-            { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
-          ).catch(() => {}); // POST response is 202 Accepted, actual result via SSE
-        }
-      } catch (e: any) {
-        fail(`Endpoint handler error: ${e.message}`);
-      }
+    const response = await axios.get(metaUrl, {
+      timeout: 6000,
+      headers: { 'Accept': 'application/json' },
     });
 
-    // Handle message events — tools/list result arrives here
-    es.onmessage = (event: any) => {
-      try {
-        const data = JSON.parse(event.data);
+    const tools = response.data?.tools || [];
+    if (!tools.length) {
+      console.warn(`[Scanner] Metadata found but no tools listed for ${server.name}`);
+      return null;
+    }
 
-        // Check if this is the tools/list result
-        if (data?.result?.tools) {
-          tools = data.result.tools.map((t: any) => ({
-            server_name:  server.name,
-            server_url:   server.url,
-            server_type:  'sse',
-            tool_name:    t.name,
-            description:  t.description || '',
-            input_schema: t.inputSchema || {},
-          }));
-          done(tools);
-          return;
-        }
+    console.log(`[Scanner] Metadata scan success: ${server.name} → ${tools.length} tools`);
 
-        // Some servers send endpoint in message event (not named event)
-        if (typeof event.data === 'string' && event.data.includes('/mcp/')) {
-          const endpoint = event.data.trim();
-          if (!messageEndpoint && !toolsRequested) {
-            messageEndpoint = endpoint.startsWith('http')
-              ? endpoint
-              : `${new URL(server.url).protocol}//${new URL(server.url).host}${endpoint}`;
-            toolsRequested = true;
-            axios.post(
-              messageEndpoint,
-              { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
-              { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
-            ).catch(() => {});
-          }
-        }
-      } catch {}
-    };
+    return tools.map((t: any) => ({
+      server_name:        server.name,
+      server_url:         server.url,
+      server_type:        response.data?.transport || 'http',
+      tool_name:          t.name,
+      description:        t.description || '',
+      input_schema:       t.inputSchema || {},
+      preset_sensitivity: t['x-reva-sensitivity'] || undefined,
+      hitl_required:      t['x-reva-hitl-required'] || false,
+    }));
 
-    es.onerror = (err: any) => {
-      if (tools.length > 0) {
-        done(tools);
-      } else {
-        fail('SSE connection error');
-      }
-    };
-  });
+  } catch (err: any) {
+    console.warn(`[Scanner] No metadata endpoint for ${server.name}: ${err.message}`);
+    return null;
+  }
 }
 
-// ── Stdio (local process) ─────────────────────────────────────────
+// ── Layer 2: Streamable HTTP POST tools/list ──────────────────────
+// Used when no metadata endpoint exists. Works for modern MCP servers.
+async function scanStreamableHttp(server: MCPServer): Promise<DiscoveredTool[] | null> {
+  try {
+    console.log(`[Scanner] HTTP scan: ${server.name}`);
+
+    const response = await axios.post(
+      server.url,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+      {
+        timeout: 8000,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept':       'application/json',
+        },
+      }
+    );
+
+    const tools = response.data?.result?.tools || [];
+    if (!tools.length) return null;
+
+    console.log(`[Scanner] HTTP scan success: ${server.name} → ${tools.length} tools`);
+
+    return tools.map((t: any) => ({
+      server_name:  server.name,
+      server_url:   server.url,
+      server_type:  'http',
+      tool_name:    t.name,
+      description:  t.description || '',
+      input_schema: t.inputSchema || {},
+    }));
+
+  } catch (err: any) {
+    console.warn(`[Scanner] HTTP scan failed for ${server.name}: ${err.message}`);
+    return null;
+  }
+}
+
+// ── Layer 3: Stdio local server ───────────────────────────────────
+// Cannot be scanned over network. Registered by name + command only.
+// Classifier derives sensitivity from server name domain patterns.
 function registerStdio(server: MCPServer): DiscoveredTool[] {
+  console.log(`[Scanner] Stdio registered: ${server.name}`);
   return [{
     server_name:  server.name,
     server_url:   '',
     server_type:  'stdio',
     tool_name:    `${server.name}_local`,
-    description:  `Local stdio server: ${server.command}`,
+    description:  `Local stdio server: ${server.command || server.name}`,
     input_schema: {},
   }];
 }
 
-// ── Fallback ──────────────────────────────────────────────────────
-function fallback(server: MCPServer): DiscoveredTool[] {
-  console.warn(`All scans failed for ${server.name} — registering as unreachable`);
+// ── Fallback: server registered but unreachable ───────────────────
+function registerUnreachable(server: MCPServer): DiscoveredTool[] {
+  console.warn(`[Scanner] Unreachable: ${server.name} — registered without tools`);
   return [{
     server_name:  server.name,
     server_url:   server.url,
@@ -189,27 +118,21 @@ function fallback(server: MCPServer): DiscoveredTool[] {
   }];
 }
 
-// ── Universal scanner ─────────────────────────────────────────────
+// ── Universal scanner: tries all methods in priority order ─────────
 async function scanServer(server: MCPServer): Promise<DiscoveredTool[]> {
+  // Stdio — never scannable over network
   if (server.type === 'stdio') return registerStdio(server);
 
-  // Try streamable HTTP first
-  try {
-    console.log(`[Scanner] HTTP scan: ${server.name}`);
-    return await scanStreamableHttp(server);
-  } catch (e1: any) {
-    console.warn(`[Scanner] HTTP failed (${server.name}): ${e1.message}`);
-  }
+  // Priority 1: metadata endpoint (public, no auth, preferred)
+  const metadata = await scanMetadataEndpoint(server);
+  if (metadata) return metadata;
 
-  // Try SSE two-channel
-  try {
-    console.log(`[Scanner] SSE scan: ${server.name}`);
-    return await scanSSE(server);
-  } catch (e2: any) {
-    console.warn(`[Scanner] SSE failed (${server.name}): ${e2.message}`);
-  }
+  // Priority 2: streamable HTTP tools/list
+  const http = await scanStreamableHttp(server);
+  if (http) return http;
 
-  return fallback(server);
+  // Priority 3: register as unreachable — classifier handles sensitivity
+  return registerUnreachable(server);
 }
 
 export async function scanAllServers(servers: MCPServer[]): Promise<DiscoveredTool[]> {
