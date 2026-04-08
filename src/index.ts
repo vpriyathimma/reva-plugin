@@ -1,18 +1,19 @@
-import express       from 'express';
-import cors          from 'cors';
-import dotenv        from 'dotenv';
-import session       from 'express-session';
+import express     from 'express';
+import cors        from 'cors';
+import path        from 'path';
+import dotenv      from 'dotenv';
+import session     from 'express-session';
 
 dotenv.config();
 
-import { authorize }              from './connector/oauth/authorize';
-import { callback }               from './connector/oauth/callback';
-import { parseDiscoveryPayload }  from './connector/discovery/configReader';
-import { scanAllServers }         from './connector/discovery/toolScanner';
-import { classifyTools }          from './connector/discovery/classifier';
-import { enrollSession }          from './connector/discovery/enroll';
-import { verifyConnectorToken }   from './connector/oauth/token';
-import inventoryRouter            from './api/inventory';
+import { authorize }             from './connector/oauth/authorize';
+import { callback }              from './connector/oauth/callback';
+import { parseDiscoveryPayload, parseDesktopConfig } from './connector/discovery/configReader';
+import { scanAllServers }        from './connector/discovery/toolScanner';
+import { classifyTools }         from './connector/discovery/classifier';
+import { enrollSession }         from './connector/discovery/enroll';
+import { verifyConnectorToken }  from './connector/oauth/token';
+import inventoryRouter           from './api/inventory';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -32,10 +33,9 @@ app.use(session({
 app.get('/oauth/authorize', authorize);
 app.get('/oauth/callback',  callback);
 
-// ── Discovery — called by Cowork on session start ─────────────────
+// ── Discovery ─────────────────────────────────────────────────────
 app.post('/api/discover', async (req, res) => {
   try {
-    // Verify connector token
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '');
     const user  = verifyConnectorToken(token);
@@ -44,22 +44,32 @@ app.post('/api/discover', async (req, res) => {
       return res.status(401).json({ error: 'Invalid or expired connector token' });
     }
 
-    const payload  = parseDiscoveryPayload(req.body);
-    const rawTools = await scanAllServers(payload.servers);
-    const tools    = classifyTools(rawTools);
-    const session  = enrollSession(payload.session_id, user.email, tools);
+    let servers;
+    if (req.body.mcpServers) {
+      servers = parseDesktopConfig(req.body);
+    } else {
+      const payload = parseDiscoveryPayload(req.body);
+      servers = payload.servers;
+    }
+
+    const session_id = req.body.session_id || `session-${Date.now()}`;
+    const rawTools   = await scanAllServers(servers);
+    const tools      = classifyTools(rawTools);
+    const enrolled   = enrollSession(session_id, user.email, tools);
 
     return res.json({
       status:       'enrolled',
-      session_id:   session.session_id,
+      session_id:   enrolled.session_id,
       user:         user.email,
-      server_count: session.server_count,
-      tool_count:   session.tool_count,
-      locked:       session.locked,
+      server_count: enrolled.server_count,
+      tool_count:   enrolled.tool_count,
+      locked:       enrolled.locked,
       tools: tools.map(t => ({
-        server:      t.server_name,
-        tool:        t.tool_name,
-        sensitivity: t.sensitivity,
+        server:             t.server_name,
+        tool:               t.tool_name,
+        type:               t.server_type,
+        sensitivity:        t.sensitivity,
+        sensitivity_reason: t.sensitivity_reason,
       })),
     });
 
@@ -69,7 +79,7 @@ app.post('/api/discover', async (req, res) => {
   }
 });
 
-// ── API routes ────────────────────────────────────────────────────
+// ── API ───────────────────────────────────────────────────────────
 app.use('/api', inventoryRouter);
 
 // ── Health ────────────────────────────────────────────────────────
@@ -77,8 +87,11 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'reva-plugin', timestamp: new Date().toISOString() });
 });
 
-app.get('/', (_req, res) => {
-  res.json({ service: 'reva-plugin', status: 'running', version: '1.0.0' });
+// ── Dashboard (React) ─────────────────────────────────────────────
+const dashboardPath = path.join(__dirname, '../dashboard/dist');
+app.use(express.static(dashboardPath));
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(dashboardPath, 'index.html'));
 });
 
 app.listen(PORT, () => {
