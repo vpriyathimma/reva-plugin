@@ -10,22 +10,41 @@ export interface DiscoveredTool {
   input_schema: any;
 }
 
-// ── Streamable HTTP (modern MCP) ──────────────────────────────────
+// ── Streamable HTTP (modern MCP 2025-03-26 spec) ──────────────────
 async function scanStreamableHttp(server: MCPServer): Promise<DiscoveredTool[]> {
   const response = await axios.post(
     server.url,
     { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
     {
       headers: {
-        'Content-Type':  'application/json',
-        'Accept':        'application/json',
+        'Content-Type': 'application/json',
+        'Accept':       'application/json, text/event-stream',
       },
       timeout: 8000,
     }
   );
 
-  const tools = response.data?.result?.tools || [];
-  if (!tools.length) throw new Error('No tools returned');
+  // Handle both direct JSON and SSE-wrapped response
+  let tools = [];
+  if (response.data?.result?.tools) {
+    tools = response.data.result.tools;
+  } else if (typeof response.data === 'string') {
+    // Parse SSE data lines from response
+    const lines = response.data.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data:')) {
+        try {
+          const parsed = JSON.parse(line.slice(5).trim());
+          if (parsed?.result?.tools) {
+            tools = parsed.result.tools;
+            break;
+          }
+        } catch {}
+      }
+    }
+  }
+
+  if (!tools.length) throw new Error('No tools in HTTP response');
 
   return tools.map((t: any) => ({
     server_name:  server.name,
@@ -37,59 +56,74 @@ async function scanStreamableHttp(server: MCPServer): Promise<DiscoveredTool[]> 
   }));
 }
 
-// ── SSE transport (legacy MCP / SecureBank style) ─────────────────
+// ── SSE two-channel protocol (legacy MCP / SecureBank) ────────────
+// Protocol:
+//   1. GET /mcp  → SSE stream, server sends endpoint event
+//   2. POST to that endpoint with tools/list
+//   3. Result arrives back on the SSE stream
 async function scanSSE(server: MCPServer): Promise<DiscoveredTool[]> {
+  const EventSource = require('eventsource');
+
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('SSE timeout')), 10000);
+    const timeout = setTimeout(() => {
+      es.close();
+      reject(new Error('SSE scan timeout after 12s'));
+    }, 12000);
 
-    let sessionUrl = '';
+    let messageEndpoint = '';
     let tools: DiscoveredTool[] = [];
-    let messageUrl = '';
+    let toolsRequested = false;
 
-    // Step 1: Connect to SSE endpoint to get session
-    const EventSource = require('eventsource');
-    const es = new EventSource(server.url, {
-      headers: { 'Accept': 'text/event-stream' },
+    const es = new EventSource(server.url);
+
+    const done = (result: DiscoveredTool[]) => {
+      clearTimeout(timeout);
+      es.close();
+      resolve(result);
+    };
+
+    const fail = (msg: string) => {
+      clearTimeout(timeout);
+      es.close();
+      reject(new Error(msg));
+    };
+
+    // Handle named 'endpoint' event — MCP sends this first
+    es.addEventListener('endpoint', async (event: any) => {
+      try {
+        let endpoint = event.data?.trim();
+        if (!endpoint) return;
+
+        // Build full URL if relative
+        if (!endpoint.startsWith('http')) {
+          const base = new URL(server.url);
+          endpoint = `${base.protocol}//${base.host}${endpoint}`;
+        }
+
+        messageEndpoint = endpoint;
+
+        if (!toolsRequested) {
+          toolsRequested = true;
+          // POST tools/list to the session endpoint
+          // Response comes back via SSE message event
+          await axios.post(
+            messageEndpoint,
+            { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+            { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
+          ).catch(() => {}); // POST response is 202 Accepted, actual result via SSE
+        }
+      } catch (e: any) {
+        fail(`Endpoint handler error: ${e.message}`);
+      }
     });
 
-    es.onmessage = async (event: any) => {
+    // Handle message events — tools/list result arrives here
+    es.onmessage = (event: any) => {
       try {
         const data = JSON.parse(event.data);
 
-        // MCP SSE sends endpoint info as first message
-        if (data.endpoint || typeof event.data === 'string' && event.data.startsWith('/')) {
-          messageUrl = data.endpoint || event.data;
-          if (!messageUrl.startsWith('http')) {
-            const base = new URL(server.url);
-            messageUrl = `${base.protocol}//${base.host}${messageUrl}`;
-          }
-
-          // Step 2: Send tools/list to the session endpoint
-          try {
-            const res = await axios.post(
-              messageUrl,
-              { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
-              { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
-            );
-            const toolList = res.data?.result?.tools || [];
-            tools = toolList.map((t: any) => ({
-              server_name:  server.name,
-              server_url:   server.url,
-              server_type:  'sse',
-              tool_name:    t.name,
-              description:  t.description || '',
-              input_schema: t.inputSchema || {},
-            }));
-          } catch (e) {
-            // Tools/list may come back via SSE stream
-          }
-          es.close();
-          clearTimeout(timeout);
-          resolve(tools.length ? tools : fallback(server, 'sse'));
-        }
-
-        // MCP SSE may also return tools directly in stream
-        if (data.result?.tools) {
+        // Check if this is the tools/list result
+        if (data?.result?.tools) {
           tools = data.result.tools.map((t: any) => ({
             server_name:  server.name,
             server_url:   server.url,
@@ -98,68 +132,84 @@ async function scanSSE(server: MCPServer): Promise<DiscoveredTool[]> {
             description:  t.description || '',
             input_schema: t.inputSchema || {},
           }));
-          es.close();
-          clearTimeout(timeout);
-          resolve(tools);
+          done(tools);
+          return;
+        }
+
+        // Some servers send endpoint in message event (not named event)
+        if (typeof event.data === 'string' && event.data.includes('/mcp/')) {
+          const endpoint = event.data.trim();
+          if (!messageEndpoint && !toolsRequested) {
+            messageEndpoint = endpoint.startsWith('http')
+              ? endpoint
+              : `${new URL(server.url).protocol}//${new URL(server.url).host}${endpoint}`;
+            toolsRequested = true;
+            axios.post(
+              messageEndpoint,
+              { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+              { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
+            ).catch(() => {});
+          }
         }
       } catch {}
     };
 
-    es.onerror = () => {
-      es.close();
-      clearTimeout(timeout);
-      reject(new Error('SSE connection failed'));
+    es.onerror = (err: any) => {
+      if (tools.length > 0) {
+        done(tools);
+      } else {
+        fail('SSE connection error');
+      }
     };
   });
 }
 
-// ── Fallback for unreachable servers ──────────────────────────────
-function fallback(server: MCPServer, type: string): DiscoveredTool[] {
-  console.warn(`Registering ${server.name} without tool scan`);
-  return [{
-    server_name:  server.name,
-    server_url:   server.url,
-    server_type:  type,
-    tool_name:    `${server.name}_service`,
-    description:  `${server.name} — tools unavailable at scan time`,
-    input_schema: {},
-  }];
-}
-
-// ── Stdio servers ─────────────────────────────────────────────────
+// ── Stdio (local process) ─────────────────────────────────────────
 function registerStdio(server: MCPServer): DiscoveredTool[] {
-  console.log(`Registering stdio: ${server.name}`);
   return [{
     server_name:  server.name,
     server_url:   '',
     server_type:  'stdio',
     tool_name:    `${server.name}_local`,
-    description:  `Local stdio: ${server.command}`,
+    description:  `Local stdio server: ${server.command}`,
     input_schema: {},
   }];
 }
 
-// ── Universal scanner — tries all transports ──────────────────────
+// ── Fallback ──────────────────────────────────────────────────────
+function fallback(server: MCPServer): DiscoveredTool[] {
+  console.warn(`All scans failed for ${server.name} — registering as unreachable`);
+  return [{
+    server_name:  server.name,
+    server_url:   server.url,
+    server_type:  'unreachable',
+    tool_name:    `${server.name}_service`,
+    description:  `${server.name} — could not retrieve tools at scan time`,
+    input_schema: {},
+  }];
+}
+
+// ── Universal scanner ─────────────────────────────────────────────
 async function scanServer(server: MCPServer): Promise<DiscoveredTool[]> {
   if (server.type === 'stdio') return registerStdio(server);
 
   // Try streamable HTTP first
   try {
-    console.log(`Trying HTTP scan: ${server.name}`);
+    console.log(`[Scanner] HTTP scan: ${server.name}`);
     return await scanStreamableHttp(server);
   } catch (e1: any) {
-    console.warn(`HTTP failed for ${server.name}: ${e1.message} — trying SSE`);
+    console.warn(`[Scanner] HTTP failed (${server.name}): ${e1.message}`);
   }
 
-  // Fall back to SSE
+  // Try SSE two-channel
   try {
-    console.log(`Trying SSE scan: ${server.name}`);
+    console.log(`[Scanner] SSE scan: ${server.name}`);
     return await scanSSE(server);
   } catch (e2: any) {
-    console.warn(`SSE failed for ${server.name}: ${e2.message}`);
+    console.warn(`[Scanner] SSE failed (${server.name}): ${e2.message}`);
   }
 
-  return fallback(server, 'unknown');
+  return fallback(server);
 }
 
 export async function scanAllServers(servers: MCPServer[]): Promise<DiscoveredTool[]> {
