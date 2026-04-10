@@ -1,7 +1,3 @@
-// Cedar PDP evaluator — same pattern as SecureBank routes.ts
-// Sends all scores as context. Cedar makes all decisions.
-// Replaces simple decision logic in beforePrompt + beforeToolCall (Phase 7)
-
 import { randomUUID } from 'crypto';
 
 const REVA_PDP_URL          = process.env.REVA_PDP_URL          || '';
@@ -12,14 +8,13 @@ const CEDAR_ORIGIN          = process.env.CEDAR_ORIGIN          || '';
 export type CedarDecision = 'allow' | 'deny' | 'conditional_allow';
 
 export interface CedarResult {
-  decision:       CedarDecision;
-  decision_id:    string;
-  reason?:        string;
-  policy_name?:   string;
-  latency_ms?:    number;
+  decision:     CedarDecision;
+  decision_id:  string;
+  reason?:      string;
+  policy_name?: string;
+  latency_ms?:  number;
 }
 
-// ── Session trace store — one trace ID per session, persistent ────
 const sessionTraceStore = new Map<string, string>();
 
 export function getOrCreateSessionTrace(sessionId: string): string {
@@ -29,13 +24,11 @@ export function getOrCreateSessionTrace(sessionId: string): string {
   return sessionTraceStore.get(sessionId)!;
 }
 
-// ── Build W3C traceparent header ──────────────────────────────────
 function buildTraceparent(sessionTraceId: string): string {
   const traceId = sessionTraceId.replace(/-/g, '').padEnd(32, '0').slice(0, 32);
   return `00-${traceId}-0000000000000001-01`;
 }
 
-// ── Main Cedar evaluation ─────────────────────────────────────────
 export async function evaluateCedar(payload: {
   principal:  { type: string; id: string };
   action:     { name: string };
@@ -45,11 +38,19 @@ export async function evaluateCedar(payload: {
 }): Promise<CedarResult> {
   const sessionTraceId = getOrCreateSessionTrace(payload.session_id);
 
+  // ── Cedar payload — matches SecureBank format exactly ────────────
   const cedarPayload = [{
-    subject:  payload.principal,
-    action:   payload.action,
-    resource: payload.resource,
-    context:  {
+    subject: {
+      type: payload.principal.type,
+      id:   payload.principal.id,
+    },
+    action: { name: payload.action.name },
+    resource: {
+      type:       payload.resource.type,
+      id:         payload.resource.id,
+      properties: payload.resource.properties || {},
+    },
+    context: {
       ...payload.context,
       session_trace_id: sessionTraceId,
     },
@@ -67,6 +68,8 @@ export async function evaluateCedar(payload: {
   const start = Date.now();
 
   try {
+    console.log('[Cedar] Sending payload:', JSON.stringify(cedarPayload[0].subject), cedarPayload[0].action, cedarPayload[0].resource.id);
+
     const res = await fetch(REVA_PDP_URL, {
       method:  'POST',
       headers,
@@ -76,13 +79,15 @@ export async function evaluateCedar(payload: {
     const latency = Date.now() - start;
 
     if (!res.ok) {
-      console.error(`[Cedar] PDP returned HTTP ${res.status}`);
-      // Fail open — do not block user on PDP error
+      const errText = await res.text();
+      console.error(`[Cedar] PDP returned HTTP ${res.status}: ${errText}`);
       return { decision: 'allow', decision_id: randomUUID(), reason: `PDP error HTTP ${res.status}`, latency_ms: latency };
     }
 
-    const result     = await res.json() as any;
+    const result      = await res.json() as any;
     const firstResult = Array.isArray(result) ? result[0] : (result?.results?.[0] ?? result);
+
+    console.log('[Cedar] Raw response:', JSON.stringify(firstResult));
 
     const rawDecision = firstResult?.decision;
     let decision: CedarDecision = 'deny';
@@ -93,7 +98,6 @@ export async function evaluateCedar(payload: {
       decision = 'conditional_allow';
     }
 
-    // Extract policy name from decision chain
     let policyName: string | undefined;
     try {
       const chain = typeof firstResult?.decision_chain === 'string'
@@ -105,14 +109,14 @@ export async function evaluateCedar(payload: {
     } catch {}
 
     console.log(JSON.stringify({
-      event:          'CEDAR_DECISION',
+      event:         'CEDAR_DECISION',
       decision,
-      policy_name:    policyName,
-      session_trace:  sessionTraceId,
-      latency_ms:     latency,
-      principal:      payload.principal.id,
-      action:         payload.action.name,
-      resource:       payload.resource.id,
+      policy_name:   policyName,
+      session_trace: sessionTraceId,
+      latency_ms:    latency,
+      principal:     payload.principal.id,
+      action:        payload.action.name,
+      resource:      payload.resource.id,
     }));
 
     return {
@@ -125,35 +129,43 @@ export async function evaluateCedar(payload: {
 
   } catch (err: any) {
     console.error(`[Cedar] PDP call failed: ${err.message}`);
-    // Fail open on network error
     return { decision: 'allow', decision_id: randomUUID(), reason: `PDP network error: ${err.message}` };
   }
 }
 
-// ── Build CallTool Cedar payload ──────────────────────────────────
+const SENSITIVITY_SCOPE: Record<string, string> = {
+  low:      'MCPTool:Read',
+  medium:   'MCPTool:Write',
+  high:     'MCPTool:Communicate',
+  critical: 'MCPTool:Destructive',
+};
+
 export function buildCallToolPayload(params: {
-  agentName:      string;
-  agentId:        string;
-  toolName:       string;
-  serverName:     string;
-  humanSub:       string;
-  clientSource:   string;
-  sessionId:      string;
-  sensitivity:    string;
-  toolScope:      string;
-  scores:         Record<string, any>;
+  agentName:        string;
+  agentId:          string;
+  toolName:         string;
+  serverName:       string;
+  humanSub:         string;
+  clientSource:     string;
+  sessionId:        string;
+  sensitivity:      string;
+  toolScope:        string;
+  scores:           Record<string, any>;
   hitlAcknowledged: boolean;
-  intent:         string;
-  priorIntents:   string;
-  query:          string;
-  queryHistory:   string;
+  intent:           string;
+  priorIntents:     string;
+  query:            string;
+  queryHistory:     string;
 }) {
   return {
-    principal: { type: 'AICodingAgents::Agent', id: params.agentName },
-    action:    { name: 'CallTool' },
-    resource:  {
-      type:       'AICodingAgents::MCPTool',
-      id:         params.toolName,
+    principal: {
+      type: 'AICodingAgents::Agent',
+      id:   params.agentName,
+    },
+    action:   { name: 'CallTool' },
+    resource: {
+      type: 'AICodingAgents::MCPTool',
+      id:   params.toolName,
       properties: {
         tool_name:   params.toolName,
         server_name: params.serverName,
@@ -170,33 +182,32 @@ export function buildCallToolPayload(params: {
       hitlAcknowledged:      params.hitlAcknowledged,
       mcp_tool_sensitivity:  params.sensitivity,
       mcp_server_name:       params.serverName,
-      mcp_tool_scope:        params.toolScope,
+      mcp_tool_scope:        SENSITIVITY_SCOPE[params.sensitivity] || 'MCPTool:Read',
       intent:                params.intent,
       prior_intents:         params.priorIntents,
       query:                 params.query.slice(0, 500),
       query_history:         params.queryHistory.slice(0, 500),
       response:              '',
-      trust_score:           params.scores.trust_score            || 70,
-      injection_score:       params.scores.injection_score        || 0,
-      jailbreak_score:       params.scores.jailbreak_score        || 0,
-      escalation_score:      params.scores.escalation_score       || 0,
-      exfiltration_score:    params.scores.exfiltration_score     || 0,
-      sod_violation:         params.scores.sod_violation          || false,
-      sod_score:             params.scores.sod_score              || 0,
-      time_anomaly_score:    params.scores.time_anomaly_score     || 0,
-      velocity_score:        params.scores.velocity_score         || 0,
-      intent_mismatch_score: params.scores.intent_mismatch_score  || 0,
-      after_hours_score:     params.scores.after_hours_score      || 0,
-      bypass_attempts_score: params.scores.bypass_attempts_score  || 0,
-      bulk_operation_score:  params.scores.bulk_operation_score   || 0,
-      intent_pool_score:     params.scores.intent_pool_score      || 0,
-      intent_pool_pattern:   params.scores.intent_pool_pattern    || 'none',
+      trust_score:           params.scores.trust_score            ?? 70,
+      injection_score:       params.scores.injection_score        ?? 0,
+      jailbreak_score:       params.scores.jailbreak_score        ?? 0,
+      escalation_score:      params.scores.escalation_score       ?? 0,
+      exfiltration_score:    params.scores.exfiltration_score     ?? 0,
+      sod_violation:         params.scores.sod_violation          ?? false,
+      sod_score:             params.scores.sod_score              ?? 0,
+      time_anomaly_score:    params.scores.time_anomaly_score     ?? 0,
+      velocity_score:        params.scores.velocity_score         ?? 0,
+      intent_mismatch_score: params.scores.intent_mismatch_score  ?? 0,
+      after_hours_score:     params.scores.after_hours_score      ?? 0,
+      bypass_attempts_score: params.scores.bypass_attempts_score  ?? 0,
+      bulk_operation_score:  params.scores.bulk_operation_score   ?? 0,
+      intent_pool_score:     params.scores.intent_pool_score      ?? 0,
+      intent_pool_pattern:   params.scores.intent_pool_pattern    ?? 'none',
     },
     session_id: params.sessionId,
   };
 }
 
-// ── Build SubmitPrompt Cedar payload ──────────────────────────────
 export function buildSubmitPromptPayload(params: {
   agentName:    string;
   agentId:      string;
@@ -210,12 +221,18 @@ export function buildSubmitPromptPayload(params: {
   queryHistory: string;
 }) {
   return {
-    principal: { type: 'AICodingAgents::Agent', id: params.agentName },
-    action:    { name: 'SubmitPrompt' },
-    resource:  {
-      type:       'AICodingAgents::Prompt',
-      id:         params.sessionId,
-      properties: { session_id: params.sessionId, client_source: params.clientSource },
+    principal: {
+      type: 'AICodingAgents::Agent',
+      id:   params.agentName,
+    },
+    action:   { name: 'SubmitPrompt' },
+    resource: {
+      type: 'AICodingAgents::Prompt',
+      id:   params.sessionId,
+      properties: {
+        session_id:    params.sessionId,
+        client_source: params.clientSource,
+      },
     },
     context: {
       access_state:          'Active',
@@ -230,19 +247,19 @@ export function buildSubmitPromptPayload(params: {
       query:                 params.query.slice(0, 500),
       query_history:         params.queryHistory.slice(0, 500),
       response:              '',
-      trust_score:           params.scores.trust_score            || 70,
-      injection_score:       params.scores.injection_score        || 0,
-      jailbreak_score:       params.scores.jailbreak_score        || 0,
-      escalation_score:      params.scores.escalation_score       || 0,
-      exfiltration_score:    params.scores.exfiltration_score     || 0,
-      sod_violation:         params.scores.sod_violation          || false,
-      sod_score:             params.scores.sod_score              || 0,
-      time_anomaly_score:    params.scores.time_anomaly_score     || 0,
-      velocity_score:        params.scores.velocity_score         || 0,
-      after_hours_score:     params.scores.after_hours_score      || 0,
-      bypass_attempts_score: params.scores.bypass_attempts_score  || 0,
-      intent_pool_score:     params.scores.intent_pool_score      || 0,
-      intent_pool_pattern:   params.scores.intent_pool_pattern    || 'none',
+      trust_score:           params.scores.trust_score            ?? 70,
+      injection_score:       params.scores.injection_score        ?? 0,
+      jailbreak_score:       params.scores.jailbreak_score        ?? 0,
+      escalation_score:      params.scores.escalation_score       ?? 0,
+      exfiltration_score:    params.scores.exfiltration_score     ?? 0,
+      sod_violation:         params.scores.sod_violation          ?? false,
+      sod_score:             params.scores.sod_score              ?? 0,
+      time_anomaly_score:    params.scores.time_anomaly_score     ?? 0,
+      velocity_score:        params.scores.velocity_score         ?? 0,
+      after_hours_score:     params.scores.after_hours_score      ?? 0,
+      bypass_attempts_score: params.scores.bypass_attempts_score  ?? 0,
+      intent_pool_score:     params.scores.intent_pool_score      ?? 0,
+      intent_pool_pattern:   params.scores.intent_pool_pattern    ?? 'none',
     },
     session_id: params.sessionId,
   };
