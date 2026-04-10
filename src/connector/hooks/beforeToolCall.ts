@@ -1,14 +1,20 @@
 import { Request, Response } from 'express';
-import { classifyToolCall }          from '../../api/intentClassifier';
-import { logDecision }               from '../discovery/enroll';
-import { sessionIntentStore }        from './beforePrompt';
-import { getToolSensitivity }        from '../../api/knownServers';
+import { classifyToolCall }              from '../../api/intentClassifier';
+import { logDecision }                   from '../discovery/enroll';
+import { sessionIntentStore }            from './beforePrompt';
+import { getToolSensitivity }            from '../../api/knownServers';
+import { triggerHITL }                  from '../hitl/trigger';
+import { pollHITL }                     from '../hitl/poll';
+import { recordHITLApproval, recordHITLDenial, hitlLog } from '../hitl/callback';
 
 export const hitlStore = new Map<string, {
   acknowledged: boolean;
   approved_at:  string;
   tool_name:    string;
 }>();
+
+// In-flight HITL — prevents duplicate pushes for same key
+const hitlInFlight = new Map<string, boolean>();
 
 export async function handleToolCall(req: Request, res: Response) {
   try {
@@ -27,8 +33,6 @@ export async function handleToolCall(req: Request, res: Response) {
 
     const sessionIntent   = sessionIntentStore.get(session_id);
     const promptIntent    = sessionIntent?.intent || 'unknown';
-
-    // URL-first lookup — server_url is authoritative, server_name is fallback
     const baseSensitivity = getToolSensitivity(server_name, server_url, tool_name);
 
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
@@ -36,8 +40,7 @@ export async function handleToolCall(req: Request, res: Response) {
     const hitlKey          = `${session_id}:${tool_name}`;
     const hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;
 
-    // ── Decision logic (Phase 4) ──────────────────────────────────
-    // Phase 7: replaced by Cedar PDP call with all scores as context
+    // ── Decision logic ────────────────────────────────────────────
     let effect: 'Permit' | 'Deny' | 'HITL' = 'Permit';
     let reason  = 'Tool call permitted';
 
@@ -76,6 +79,40 @@ export async function handleToolCall(req: Request, res: Response) {
       reason,
     });
 
+    // ── HITL: trigger Okta Verify push in background ──────────────
+    if (effect === 'HITL' && !hitlInFlight.get(hitlKey)) {
+      hitlInFlight.set(hitlKey, true);
+
+      // Fire and forget — do not block hook response
+      (async () => {
+        try {
+          const triggerResult = await triggerHITL(user_email, tool_name, session_id);
+
+          if (!triggerResult.success || !triggerResult.poll_url) {
+            console.warn(`[HITL] Trigger failed: ${triggerResult.error}`);
+            recordHITLDenial(session_id, tool_name, user_email, 'error', undefined);
+            hitlInFlight.delete(hitlKey);
+            return;
+          }
+
+          console.log(`[HITL] Push sent to ${user_email} for ${tool_name}`);
+
+          // Poll for response
+          const status = await pollHITL(triggerResult.poll_url);
+
+          if (status === 'approved') {
+            recordHITLApproval(session_id, tool_name, user_email, triggerResult.poll_url);
+          } else {
+            recordHITLDenial(session_id, tool_name, user_email, status, triggerResult.poll_url);
+          }
+        } catch (err: any) {
+          console.error(`[HITL] Background error: ${err.message}`);
+        } finally {
+          hitlInFlight.delete(hitlKey);
+        }
+      })();
+    }
+
     if (effect === 'Deny') {
       return res.json({
         hookSpecificOutput: {
@@ -92,7 +129,7 @@ export async function handleToolCall(req: Request, res: Response) {
         hookSpecificOutput: {
           hookEventName:            'PreToolUse',
           permissionDecision:       'deny',
-          permissionDecisionReason: `${reason}. Check your Okta Verify app to approve.`,
+          permissionDecisionReason: `${reason}. A push notification has been sent to your Okta Verify app. Approve it then re-submit your request.`,
         },
         reva: { effect: 'HITL', reason, hitl_required: true, hitl_key: hitlKey, trust_score: result.trust_score, intent: result.intent, sensitivity: result.sensitivity, hitlAcknowledged, scores: result.scores },
       });

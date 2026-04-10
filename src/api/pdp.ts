@@ -101,3 +101,18 @@ Respond with exactly this JSON:
 });
 
 export default router;
+
+// ── HITL log — dashboard visibility ──────────────────────────────
+import { hitlLog, getHITLStatus } from '../connector/hitl/callback';
+import { hitlStore }              from '../connector/hooks/beforeToolCall';
+
+router.get('/pdp/hitl', verifyHookToken, (_req, res) => {
+  res.json({ hitl_log: [...hitlLog].reverse().slice(0, 50), total: hitlLog.length });
+});
+
+router.get('/pdp/hitl/:session_id/:tool_name', verifyHookToken, (req, res) => {
+  const { session_id, tool_name } = req.params;
+  const record = getHITLStatus(session_id, tool_name);
+  const acknowledged = hitlStore.get(`${session_id}:${tool_name}`)?.acknowledged || false;
+  res.json({ record, acknowledged });
+});
