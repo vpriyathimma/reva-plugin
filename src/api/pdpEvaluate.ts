@@ -159,12 +159,12 @@ export function buildCallToolPayload(params: {
 }) {
   return {
     principal: {
-      type: 'AICodingAgents::Agent',
+      type: 'Agent',
       id:   params.agentName,
     },
     action:   { name: 'CallTool' },
     resource: {
-      type: 'AICodingAgents::MCPTool',
+      type: 'MCPTool',
       id:   params.toolName,
       properties: {
         tool_name:   params.toolName,
@@ -222,12 +222,12 @@ export function buildSubmitPromptPayload(params: {
 }) {
   return {
     principal: {
-      type: 'AICodingAgents::Agent',
+      type: 'Agent',
       id:   params.agentName,
     },
     action:   { name: 'SubmitPrompt' },
     resource: {
-      type: 'AICodingAgents::Prompt',
+      type: 'Prompt',
       id:   params.sessionId,
       properties: {
         session_id:    params.sessionId,
