@@ -18,12 +18,15 @@ export function authorize(req: Request, res: Response) {
     client_id:     process.env.OKTA_CLIENT_ID!,
     redirect_uri:  process.env.OKTA_REDIRECT_URI!,
     response_type: 'code',
-    scope:         'openid profile email groups',
+    scope:         'openid profile email',
     state,
     nonce,
   });
 
-  // Using default custom authorization server
-  const oktaAuthUrl = `https://${process.env.OKTA_DOMAIN}/oauth2/default/v1/authorize?${params.toString()}`;
+  // Use ORG auth server — required so auth code can be exchanged
+  // at org /token endpoint for ID token needed in ID-JAG exchange
+  // Okta docs: "You must use the org authorization server for this step"
+  const oktaAuthUrl = `https://${process.env.OKTA_DOMAIN}/oauth2/v1/authorize?${params.toString()}`;
+  console.log('[authorize] Redirecting to org auth server:', oktaAuthUrl.split('?')[0]);
   res.redirect(oktaAuthUrl);
 }
