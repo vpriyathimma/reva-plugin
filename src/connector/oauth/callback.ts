@@ -3,23 +3,27 @@ import axios from 'axios';
 import { issueConnectorToken } from './token';
 import { stateStore } from './authorize';
 
+// Store Okta id_token keyed by email — used for ID-JAG exchange
+// In-memory only, expires with session
+export const idTokenStore = new Map<string, {
+  id_token:   string;
+  stored_at:  string;
+}>();
+
 export async function callback(req: Request, res: Response) {
   const { code, state, error, error_description } = req.query;
 
-  // Handle Okta errors returned to callback
-  if (error) {
-    return res.status(400).json({ error, error_description });
-  }
-
-  if (!code) {
-    return res.status(400).json({ error: 'No authorization code received' });
-  }
+  if (error) return res.status(400).json({ error, error_description });
+  if (!code)  return res.status(400).json({ error: 'No authorization code received' });
 
   const stateContext = state ? stateStore.get(state as string) : null;
   if (state) stateStore.delete(state as string);
 
   try {
-    const tokenUrl = `https://${process.env.OKTA_DOMAIN}/oauth2/default/v1/token`;
+    // ── Use ORG auth server — required for ID token + ID-JAG exchange ──
+    // Okta docs: "You must use the org authorization server and not the
+    // custom authorization server for this step."
+    const tokenUrl = `https://${process.env.OKTA_DOMAIN}/oauth2/v1/token`;
 
     const tokenParams = new URLSearchParams({
       grant_type:    'authorization_code',
@@ -29,30 +33,41 @@ export async function callback(req: Request, res: Response) {
       client_secret: process.env.OKTA_CLIENT_SECRET!,
     });
 
-    console.log('Token exchange URL:', tokenUrl);
-    console.log('Redirect URI used:', process.env.OKTA_REDIRECT_URI);
+    console.log('[callback] Token exchange at org auth server:', tokenUrl);
 
     const tokenResponse = await axios.post(tokenUrl, tokenParams.toString(), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
 
-    const { access_token } = tokenResponse.data;
+    const { access_token, id_token } = tokenResponse.data;
+
+    console.log('[callback] id_token present:', !!id_token);
+    console.log('[callback] access_token present:', !!access_token);
 
     // Get user info
     const userInfo = await axios.get(
-      `https://${process.env.OKTA_DOMAIN}/oauth2/default/v1/userinfo`,
+      `https://${process.env.OKTA_DOMAIN}/oauth2/v1/userinfo`,
       { headers: { Authorization: `Bearer ${access_token}` } }
     );
 
     const { email, name } = userInfo.data;
 
+    // Store id_token for ID-JAG exchange
+    if (id_token) {
+      idTokenStore.set(email, {
+        id_token,
+        stored_at: new Date().toISOString(),
+      });
+      console.log(`[callback] Stored id_token for ${email}`);
+    }
+
     const connectorPayload = {
       email,
       name,
       groups:            [],
-      coworkClientId:    stateContext?.coworkClientId || '',
+      coworkClientId:    stateContext?.coworkClientId    || '',
       coworkRedirectUri: stateContext?.coworkRedirectUri || '',
-      requestedScopes:   stateContext?.requestedScopes || '',
+      requestedScopes:   stateContext?.requestedScopes   || '',
       enrolledAt:        new Date().toISOString(),
     };
 
@@ -68,7 +83,7 @@ export async function callback(req: Request, res: Response) {
 
   } catch (err: any) {
     const detail = err.response?.data || err.message;
-    console.error('OAuth callback error:', JSON.stringify(detail));
+    console.error('[callback] OAuth error:', JSON.stringify(detail));
     return res.status(500).json({ error: 'Authentication failed', detail });
   }
 }
