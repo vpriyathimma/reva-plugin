@@ -103,7 +103,8 @@ export async function handleToolCall(req: Request, res: Response) {
           if (status === 'approved') {
             recordHITLApproval(session_id, tool_name, user_email, triggerResult.poll_url);
           } else {
-            recordHITLDenial(session_id, tool_name, user_email, status, triggerResult.poll_url);
+            const denyStatus = status === 'waiting' ? 'timeout' : status;
+            recordHITLDenial(session_id, tool_name, user_email, denyStatus as 'denied' | 'timeout' | 'error', triggerResult.poll_url);
           }
         } catch (err: any) {
           console.error(`[HITL] Background error: ${err.message}`);
