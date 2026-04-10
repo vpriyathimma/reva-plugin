@@ -15,6 +15,7 @@ import { enrollSession }         from './connector/discovery/enroll';
 import { verifyConnectorToken }  from './connector/oauth/token';
 import inventoryRouter           from './api/inventory';
 import pdpRouter                 from './api/pdp';
+import testIdjagRouter           from './api/testIdjag';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -83,6 +84,7 @@ app.post('/api/discover', async (req, res) => {
 // ── API ───────────────────────────────────────────────────────────
 app.use('/api', inventoryRouter);
 app.use('/api', pdpRouter);
+app.use('/api', testIdjagRouter);
 
 // ── Health ────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
