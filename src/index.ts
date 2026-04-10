@@ -14,6 +14,7 @@ import { classifyTools }         from './connector/discovery/classifier';
 import { enrollSession }         from './connector/discovery/enroll';
 import { verifyConnectorToken }  from './connector/oauth/token';
 import inventoryRouter           from './api/inventory';
+import pdpRouter                 from './api/pdp';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -81,6 +82,7 @@ app.post('/api/discover', async (req, res) => {
 
 // ── API ───────────────────────────────────────────────────────────
 app.use('/api', inventoryRouter);
+app.use('/api', pdpRouter);
 
 // ── Health ────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
