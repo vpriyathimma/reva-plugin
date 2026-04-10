@@ -1,11 +1,13 @@
-import { Request, Response } from 'express';
-import { classifyToolCall }              from '../../api/intentClassifier';
-import { logDecision }                   from '../discovery/enroll';
-import { sessionIntentStore }            from './beforePrompt';
-import { getToolSensitivity }            from '../../api/knownServers';
-import { triggerHITL }                  from '../hitl/trigger';
-import { pollHITL }                     from '../hitl/poll';
-import { recordHITLApproval, recordHITLDenial, hitlLog } from '../hitl/callback';
+import { Request, Response }     from 'express';
+import { classifyToolCall }      from '../../api/intentClassifier';
+import { logDecision }           from '../discovery/enroll';
+import { sessionIntentStore }    from './beforePrompt';
+import { getToolSensitivity }    from '../../api/knownServers';
+import { triggerHITL }           from '../hitl/trigger';
+import { pollHITL }              from '../hitl/poll';
+import { recordHITLApproval, recordHITLDenial } from '../hitl/callback';
+import { resolveAgentName }      from '../../api/agentResolver';
+import { evaluateCedar, buildCallToolPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
 export const hitlStore = new Map<string, {
   acknowledged: boolean;
@@ -13,8 +15,15 @@ export const hitlStore = new Map<string, {
   tool_name:    string;
 }>();
 
-// In-flight HITL — prevents duplicate pushes for same key
 const hitlInFlight = new Map<string, boolean>();
+
+// Scope mapping — tool sensitivity → MCPTool scope
+const SENSITIVITY_SCOPE: Record<string, string> = {
+  low:      'MCPTool:Read',
+  medium:   'MCPTool:Write',
+  high:     'MCPTool:Communicate',
+  critical: 'MCPTool:Destructive',
+};
 
 export async function handleToolCall(req: Request, res: Response) {
   try {
@@ -23,16 +32,19 @@ export async function handleToolCall(req: Request, res: Response) {
     if (!token) return res.status(401).json({ error: 'Missing connector token' });
 
     const {
-      session_id  = `session-${Date.now()}`,
-      tool_name   = '',
-      tool_input  = {},
-      server_name = '',
-      server_url  = '',
-      user_email  = 'unknown',
+      session_id    = `session-${Date.now()}`,
+      tool_name     = '',
+      server_name   = '',
+      server_url    = '',
+      user_email    = 'unknown',
+      agent_cid     = '',
+      client_source = 'cowork',
     } = req.body;
 
     const sessionIntent   = sessionIntentStore.get(session_id);
-    const promptIntent    = sessionIntent?.intent || 'unknown';
+    const promptIntent    = sessionIntent?.intent        || 'unknown';
+    const priorIntents    = sessionIntent?.prior_intents || '';
+    const query           = sessionIntent?.query         || '';
     const baseSensitivity = getToolSensitivity(server_name, server_url, tool_name);
 
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
@@ -40,32 +52,49 @@ export async function handleToolCall(req: Request, res: Response) {
     const hitlKey          = `${session_id}:${tool_name}`;
     const hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;
 
-    // ── Decision logic ────────────────────────────────────────────
+    // Resolve agent name from Okta (cached)
+    const agentName = agent_cid ? await resolveAgentName(agent_cid) : 'CoworkAICodingAgent';
+
+    // Ensure session trace ID
+    getOrCreateSessionTrace(session_id);
+
+    // Scope from sensitivity
+    const toolScope = SENSITIVITY_SCOPE[result.sensitivity] || 'MCPTool:Read';
+
+    // ── Cedar PDP evaluation ──────────────────────────────────────
+    const cedarPayload = buildCallToolPayload({
+      agentName,
+      agentId:         agent_cid,
+      toolName:        tool_name,
+      serverName:      server_name,
+      humanSub:        user_email,
+      clientSource:    client_source,
+      sessionId:       session_id,
+      sensitivity:     result.sensitivity,
+      toolScope,
+      scores:          { ...result.scores, trust_score: result.trust_score },
+      hitlAcknowledged,
+      intent:          result.intent,
+      priorIntents,
+      query,
+      queryHistory:    priorIntents,
+    });
+
+    const cedarResult = await evaluateCedar(cedarPayload);
+
     let effect: 'Permit' | 'Deny' | 'HITL' = 'Permit';
     let reason  = 'Tool call permitted';
 
-    const dangerousMismatch =
-      ['read'].includes(promptIntent) &&
-      ['destructive', 'exfiltrate'].includes(result.intent);
-
-    if (dangerousMismatch) {
+    if (cedarResult.decision === 'deny') {
       effect = 'Deny';
-      reason = `Intent mismatch: prompt intent "${promptIntent}" but tool "${tool_name}" is "${result.intent}"`;
-    } else if (result.scores.sod_violation) {
-      effect = 'Deny';
-      reason = `SOD violation detected`;
-    } else if (result.sensitivity === 'critical') {
-      effect = 'Deny';
-      reason = `Critical sensitivity tool "${tool_name}" — not permitted via Cowork`;
-    } else if (result.sensitivity === 'high' && !hitlAcknowledged) {
+      reason = cedarResult.policy_name
+        ? `Denied by policy: ${cedarResult.policy_name}`
+        : 'Denied by Cedar PDP';
+    } else if (cedarResult.decision === 'conditional_allow') {
       effect = 'HITL';
-      reason = `High sensitivity tool "${tool_name}" requires human approval`;
-    } else if (result.scores.bulk_operation_score > 50 && !hitlAcknowledged) {
-      effect = 'HITL';
-      reason = `Bulk operation on "${tool_name}" requires human approval`;
-    } else if (result.trust_score < 20) {
-      effect = 'Deny';
-      reason = `Trust score critically low (${result.trust_score}/100)`;
+      reason = cedarResult.policy_name
+        ? `HITL required by policy: ${cedarResult.policy_name}`
+        : 'HITL required by Cedar PDP';
     }
 
     logDecision({
@@ -79,32 +108,23 @@ export async function handleToolCall(req: Request, res: Response) {
       reason,
     });
 
-    // ── HITL: trigger Okta Verify push in background ──────────────
+    // HITL: trigger Okta Verify push in background
     if (effect === 'HITL' && !hitlInFlight.get(hitlKey)) {
       hitlInFlight.set(hitlKey, true);
-
-      // Fire and forget — do not block hook response
       (async () => {
         try {
           const triggerResult = await triggerHITL(user_email, tool_name, session_id);
-
           if (!triggerResult.success || !triggerResult.poll_url) {
-            console.warn(`[HITL] Trigger failed: ${triggerResult.error}`);
-            recordHITLDenial(session_id, tool_name, user_email, 'error', undefined);
+            recordHITLDenial(session_id, tool_name, user_email, 'error');
             hitlInFlight.delete(hitlKey);
             return;
           }
-
-          console.log(`[HITL] Push sent to ${user_email} for ${tool_name}`);
-
-          // Poll for response
           const status = await pollHITL(triggerResult.poll_url);
-
           if (status === 'approved') {
             recordHITLApproval(session_id, tool_name, user_email, triggerResult.poll_url);
           } else {
-            const denyStatus = status === 'waiting' ? 'timeout' : status;
-            recordHITLDenial(session_id, tool_name, user_email, denyStatus as 'denied' | 'timeout' | 'error', triggerResult.poll_url);
+            const denyStatus = status === 'waiting' ? 'timeout' : status as 'denied' | 'timeout' | 'error';
+            recordHITLDenial(session_id, tool_name, user_email, denyStatus, triggerResult.poll_url);
           }
         } catch (err: any) {
           console.error(`[HITL] Background error: ${err.message}`);
@@ -121,7 +141,7 @@ export async function handleToolCall(req: Request, res: Response) {
           permissionDecision:       'deny',
           permissionDecisionReason: reason,
         },
-        reva: { effect, reason, trust_score: result.trust_score, intent: result.intent, sensitivity: result.sensitivity, hitlAcknowledged, scores: result.scores },
+        reva: { effect, reason, trust_score: result.trust_score, sensitivity: result.sensitivity, hitlAcknowledged, cedar: cedarResult },
       });
     }
 
@@ -130,15 +150,15 @@ export async function handleToolCall(req: Request, res: Response) {
         hookSpecificOutput: {
           hookEventName:            'PreToolUse',
           permissionDecision:       'deny',
-          permissionDecisionReason: `${reason}. A push notification has been sent to your Okta Verify app. Approve it then re-submit your request.`,
+          permissionDecisionReason: `${reason}. A push notification has been sent to your Okta Verify app. Approve it then re-submit.`,
         },
-        reva: { effect: 'HITL', reason, hitl_required: true, hitl_key: hitlKey, trust_score: result.trust_score, intent: result.intent, sensitivity: result.sensitivity, hitlAcknowledged, scores: result.scores },
+        reva: { effect: 'HITL', reason, hitl_required: true, hitl_key: hitlKey, trust_score: result.trust_score, sensitivity: result.sensitivity, hitlAcknowledged, cedar: cedarResult },
       });
     }
 
     return res.json({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
-      reva: { effect: 'Permit', reason, trust_score: result.trust_score, intent: result.intent, sensitivity: result.sensitivity, scores: result.scores },
+      reva: { effect: 'Permit', reason, trust_score: result.trust_score, sensitivity: result.sensitivity, cedar: cedarResult },
     });
 
   } catch (err: any) {
