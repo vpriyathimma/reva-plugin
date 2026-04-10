@@ -1,7 +1,7 @@
 // Known servers registry
-// Pre-populated for Gmail and Jira
-// Admin extends via Tool Registry UI — version controlled
-// Phase 9: intent values replaced by ML engine output
+// Keyed by canonical server key — URL pattern is primary lookup
+// URL is source of truth, not server name
+// Admin extends via Tool Registry UI — in-memory only for demo
 
 export interface ToolEntry {
   intent:      string[];
@@ -10,108 +10,147 @@ export interface ToolEntry {
   version:     number;
 }
 
-export interface ServerRegistry {
-  [serverUrl: string]: {
-    version:  number;
-    history:  Array<{ v: number; by: string; at: string; reason: string }>;
-    tools:    Record<string, ToolEntry>;
-  };
+export interface ServerRegistryEntry {
+  display_name:    string;
+  url_patterns:    string[];   // substrings matched against server URL
+  oauth_protected: boolean;
+  version:         number;
+  history:         Array<{ v: number; by: string; at: string; reason: string }>;
+  tools:           Record<string, ToolEntry>;
 }
 
-export const knownServers: ServerRegistry = {
-  'gmail.mcp.claude.com': {
+export const knownServers: Record<string, ServerRegistryEntry> = {
+  'gmail': {
+    display_name:    'Gmail',
+    url_patterns:    ['gmail.mcp.claude.com'],
+    oauth_protected: true,
     version: 1,
-    history: [{ v: 1, by: 'system', at: new Date().toISOString(), reason: 'Initial population from Anthropic docs' }],
+    history: [{ v: 1, by: 'system', at: new Date().toISOString(), reason: 'Anthropic official Gmail connector' }],
     tools: {
-      'gmail_get_profile':       { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
-      'gmail_search_messages':   { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
-      'gmail_get_message':       { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
-      'gmail_list_drafts':       { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
-      'gmail_create_draft':      { intent: ['write'],       sensitivity: 'medium',   source: 'known', version: 1 },
-      'gmail_send_email':        { intent: ['communicate'], sensitivity: 'high',     source: 'known', version: 1 },
-      'gmail_modify_message':    { intent: ['modify'],      sensitivity: 'medium',   source: 'known', version: 1 },
-      'gmail_delete_message':    { intent: ['destructive'], sensitivity: 'high',     source: 'known', version: 1 },
-      'gmail_batch_delete':      { intent: ['destructive'], sensitivity: 'critical', source: 'known', version: 1 },
+      'gmail_get_profile':     { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
+      'gmail_search_messages': { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
+      'gmail_get_message':     { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
+      'gmail_list_drafts':     { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
+      'gmail_create_draft':    { intent: ['write'],       sensitivity: 'medium',   source: 'known', version: 1 },
+      'gmail_send_email':      { intent: ['communicate'], sensitivity: 'high',     source: 'known', version: 1 },
+      'gmail_modify_message':  { intent: ['modify'],      sensitivity: 'medium',   source: 'known', version: 1 },
+      'gmail_delete_message':  { intent: ['destructive'], sensitivity: 'high',     source: 'known', version: 1 },
+      'gmail_batch_delete':    { intent: ['destructive'], sensitivity: 'critical', source: 'known', version: 1 },
     },
   },
-  'mcp.atlassian.com': {
+  'jira': {
+    display_name:    'Jira / Atlassian',
+    url_patterns:    ['mcp.atlassian.com'],
+    oauth_protected: true,
     version: 1,
-    history: [{ v: 1, by: 'system', at: new Date().toISOString(), reason: 'Initial population from Atlassian docs' }],
+    history: [{ v: 1, by: 'system', at: new Date().toISOString(), reason: 'Atlassian official Remote MCP Server' }],
     tools: {
-      'search_issues':           { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
-      'get_issue':               { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
-      'list_projects':           { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
-      'get_project':             { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
-      'create_issue':            { intent: ['write'],       sensitivity: 'medium',   source: 'known', version: 1 },
-      'add_comment':             { intent: ['write'],       sensitivity: 'low',      source: 'known', version: 1 },
-      'update_issue':            { intent: ['modify'],      sensitivity: 'medium',   source: 'known', version: 1 },
-      'assign_issue':            { intent: ['govern'],      sensitivity: 'medium',   source: 'known', version: 1 },
-      'transition_issue':        { intent: ['govern'],      sensitivity: 'medium',   source: 'known', version: 1 },
-      'delete_issue':            { intent: ['destructive'], sensitivity: 'critical', source: 'known', version: 1 },
+      'search_issues':    { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
+      'get_issue':        { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
+      'list_projects':    { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
+      'get_project':      { intent: ['read'],        sensitivity: 'low',      source: 'known', version: 1 },
+      'create_issue':     { intent: ['write'],       sensitivity: 'medium',   source: 'known', version: 1 },
+      'add_comment':      { intent: ['write'],       sensitivity: 'low',      source: 'known', version: 1 },
+      'update_issue':     { intent: ['modify'],      sensitivity: 'medium',   source: 'known', version: 1 },
+      'assign_issue':     { intent: ['govern'],      sensitivity: 'medium',   source: 'known', version: 1 },
+      'transition_issue': { intent: ['govern'],      sensitivity: 'medium',   source: 'known', version: 1 },
+      'delete_issue':     { intent: ['destructive'], sensitivity: 'critical', source: 'known', version: 1 },
     },
   },
-  'richard-unshunted-aubri.ngrok-free.dev': {
+  'reva-mcp': {
+    display_name:    'Reva MCP Server',
+    url_patterns:    ['reva-mcp-server.onrender.com'],
+    oauth_protected: false,
     version: 1,
     history: [{ v: 1, by: 'system', at: new Date().toISOString(), reason: 'Authoritative from metadata endpoint' }],
     tools: {
-      'getCreditScore':          { intent: ['read'],        sensitivity: 'high',     source: 'metadata', version: 1 },
+      'getCreditScore': { intent: ['read'], sensitivity: 'high', source: 'metadata', version: 1 },
+    },
+  },
+  'figi': {
+    display_name:    'FIGI / OpenFIGI',
+    url_patterns:    [],   // stdio — no URL, matched by server name
+    oauth_protected: false,
+    version: 1,
+    history: [{ v: 1, by: 'system', at: new Date().toISOString(), reason: 'stdio server — name-based match' }],
+    tools: {
+      'figi_bulk_map':                  { intent: ['read'], sensitivity: 'high',   source: 'known', version: 1 },
+      'figi_map_instrument':            { intent: ['read'], sensitivity: 'high',   source: 'known', version: 1 },
+      'figi_search_instruments':        { intent: ['read'], sensitivity: 'medium', source: 'known', version: 1 },
+      'bedrock_list_iam_users':         { intent: ['read'], sensitivity: 'high',   source: 'known', version: 1 },
+      'bedrock_list_s3_buckets':        { intent: ['read'], sensitivity: 'high',   source: 'known', version: 1 },
+      'einstein_list_salesforce_users': { intent: ['read'], sensitivity: 'high',   source: 'known', version: 1 },
     },
   },
 };
 
-// ── Lookup ────────────────────────────────────────────────────────
-export function getToolSensitivity(serverName: string, toolName: string): string {
-  // Try exact URL match first
-  for (const [url, registry] of Object.entries(knownServers)) {
-    if (serverName.includes(url) || url.includes(serverName)) {
-      const tool = registry.tools[toolName];
-      if (tool) return tool.sensitivity;
+// ── Resolve server by URL first, then name fallback for stdio ─────
+export function resolveServer(
+  serverName: string,
+  serverUrl:  string
+): { key: string; entry: ServerRegistryEntry } | null {
+  // 1. URL pattern match — authoritative for HTTP servers
+  if (serverUrl) {
+    for (const [key, entry] of Object.entries(knownServers)) {
+      if (entry.url_patterns.some(p => serverUrl.includes(p))) {
+        return { key, entry };
+      }
     }
   }
-  // Default medium for unknown tools
-  return 'medium';
-}
 
-export function getToolEntry(serverName: string, toolName: string): ToolEntry | null {
-  for (const [url, registry] of Object.entries(knownServers)) {
-    if (serverName.includes(url) || url.includes(serverName)) {
-      return registry.tools[toolName] || null;
+  // 2. Name match for stdio servers (url_patterns is empty)
+  if (serverName) {
+    const lower = serverName.toLowerCase();
+    for (const [key, entry] of Object.entries(knownServers)) {
+      if (entry.url_patterns.length === 0 && (lower === key || lower.includes(key) || key.includes(lower))) {
+        return { key, entry };
+      }
     }
   }
+
   return null;
 }
 
-// ── Admin override ────────────────────────────────────────────────
+export function getToolSensitivity(
+  serverName: string,
+  serverUrl:  string,
+  toolName:   string
+): string {
+  const match = resolveServer(serverName, serverUrl);
+  return match?.entry.tools[toolName]?.sensitivity || 'medium';
+}
+
+// ── Admin override — in-memory only ──────────────────────────────
 export function updateToolEntry(
-  serverUrl:   string,
-  toolName:    string,
-  intent:      string[],
-  sensitivity: string,
-  adminEmail:  string,
-  reason:      string,
+  serverIdentifier: string,
+  toolName:         string,
+  intent:           string[],
+  sensitivity:      string,
+  adminEmail:       string,
+  reason:           string,
 ): void {
-  if (!knownServers[serverUrl]) {
-    knownServers[serverUrl] = {
-      version: 1,
-      history: [],
-      tools:   {},
+  // Try URL match first, then name match
+  let match = resolveServer(serverIdentifier, serverIdentifier);
+
+  if (!match) {
+    // New unknown server — create entry
+    const hostname = serverIdentifier.startsWith('http')
+      ? new URL(serverIdentifier).hostname
+      : serverIdentifier;
+    knownServers[hostname] = {
+      display_name:    serverIdentifier,
+      url_patterns:    serverIdentifier.startsWith('http') ? [hostname] : [],
+      oauth_protected: false,
+      version:         1,
+      history:         [],
+      tools:           {},
     };
+    match = { key: hostname, entry: knownServers[hostname] };
   }
-  const registry = knownServers[serverUrl];
+
+  const registry   = match.entry;
   const newVersion = (registry.tools[toolName]?.version || 0) + 1;
-
-  registry.tools[toolName] = {
-    intent,
-    sensitivity,
-    source:  'admin',
-    version: newVersion,
-  };
-
+  registry.tools[toolName] = { intent, sensitivity, source: 'admin', version: newVersion };
   registry.version += 1;
-  registry.history.push({
-    v:      registry.version,
-    by:     adminEmail,
-    at:     new Date().toISOString(),
-    reason,
-  });
+  registry.history.push({ v: registry.version, by: adminEmail, at: new Date().toISOString(), reason });
 }

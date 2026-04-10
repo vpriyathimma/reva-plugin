@@ -21,12 +21,15 @@ export async function handleToolCall(req: Request, res: Response) {
       tool_name   = '',
       tool_input  = {},
       server_name = '',
+      server_url  = '',
       user_email  = 'unknown',
     } = req.body;
 
     const sessionIntent   = sessionIntentStore.get(session_id);
     const promptIntent    = sessionIntent?.intent || 'unknown';
-    const baseSensitivity = getToolSensitivity(server_name, tool_name);
+
+    // URL-first lookup — server_url is authoritative, server_name is fallback
+    const baseSensitivity = getToolSensitivity(server_name, server_url, tool_name);
 
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
 
@@ -34,11 +37,10 @@ export async function handleToolCall(req: Request, res: Response) {
     const hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;
 
     // ── Decision logic (Phase 4) ──────────────────────────────────
+    // Phase 7: replaced by Cedar PDP call with all scores as context
     let effect: 'Permit' | 'Deny' | 'HITL' = 'Permit';
     let reason  = 'Tool call permitted';
 
-    // Only flag mismatch for genuinely dangerous combinations
-    // read→destructive is a mismatch, read→communicate is NOT
     const dangerousMismatch =
       ['read'].includes(promptIntent) &&
       ['destructive', 'exfiltrate'].includes(result.intent);
