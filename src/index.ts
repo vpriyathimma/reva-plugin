@@ -106,7 +106,7 @@ app.get('/health', (_req, res) => {
 const dashboardPath = path.join(__dirname, '../dashboard/dist');
 app.use(express.static(dashboardPath));
 app.get('*', (req, res) => {
-  if (req.path.startsWith('/mcp') || req.path.startsWith('/.well-known') || req.path.startsWith('/oauth')) {
+  if (req.path === '/' || req.path.startsWith('/mcp') || req.path.startsWith('/.well-known') || req.path.startsWith('/oauth')) {
     return res.status(404).json({ error: 'Not found' });
   }
   res.sendFile(path.join(dashboardPath, 'index.html'));

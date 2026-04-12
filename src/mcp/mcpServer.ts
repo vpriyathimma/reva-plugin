@@ -14,43 +14,34 @@ import { recordHITLApproval, recordHITLDenial } from '../connector/hitl/callback
 const router = Router();
 
 const OKTA_DOMAIN = process.env.OKTA_DOMAIN || 'demo-ai-auth-raah.okta.com';
-
-// Cache userinfo to avoid repeated Okta calls
 const userInfoCache = new Map<string, { email: string; name: string; expires: number }>();
 
-// ── Resolve user from any token type ─────────────────────────────
 async function getMcpUser(req: Request): Promise<{ email: string; name: string } | null> {
   const auth  = req.headers.authorization || '';
   const token = auth.replace('Bearer ', '');
   if (!token) return null;
 
-  // 1. Try Reva connector token
   const connectorUser = verifyConnectorToken(token);
   if (connectorUser) return connectorUser;
 
-  // 2. Check cache
   const cached = userInfoCache.get(token);
-  if (cached && cached.expires > Date.now()) {
-    return { email: cached.email, name: cached.name };
-  }
+  if (cached && cached.expires > Date.now()) return { email: cached.email, name: cached.name };
 
-  // 3. Try Okta userinfo endpoint — for Okta access tokens from Cowork
   try {
     const res = await fetch(`https://${OKTA_DOMAIN}/oauth2/v1/userinfo`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-
     if (res.ok) {
       const data = await res.json() as any;
-      const user = { email: data.email || data.sub, name: data.name || data.email || data.sub };
+      const user = { email: data.email || data.sub, name: data.name || data.sub };
       userInfoCache.set(token, { ...user, expires: Date.now() + 3600000 });
       return user;
     }
+    console.warn('[MCP] Okta userinfo status:', res.status);
   } catch (err: any) {
     console.warn('[MCP] Okta userinfo failed:', err.message);
   }
 
-  // 4. Try decoding JWT sub claim as fallback
   try {
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
     if (payload.sub) return { email: payload.sub, name: payload.name || payload.sub };
@@ -59,28 +50,27 @@ async function getMcpUser(req: Request): Promise<{ email: string; name: string }
   return null;
 }
 
-// ── MCP tool definitions ──────────────────────────────────────────
 const MCP_TOOLS = [
   {
-    name:        'reva_governance_status',
-    description: 'Get Reva governance status for the current session — trust score, active policies, HITL status',
+    name: 'reva_governance_status',
+    description: 'Get Reva governance status for the current session',
     inputSchema: { type: 'object', properties: { session_id: { type: 'string' } } },
   },
   {
-    name:        'reva_evaluate_prompt',
-    description: 'Evaluate a prompt against Reva Cedar governance policies before execution',
+    name: 'reva_evaluate_prompt',
+    description: 'Evaluate a prompt against Reva Cedar governance policies',
     inputSchema: {
       type: 'object',
       properties: {
-        prompt:     { type: 'string', description: 'The prompt text to evaluate' },
+        prompt:     { type: 'string' },
         session_id: { type: 'string' },
-        agent_cid:  { type: 'string', description: 'Agent client ID from Okta' },
+        agent_cid:  { type: 'string' },
       },
       required: ['prompt'],
     },
   },
   {
-    name:        'reva_evaluate_tool',
+    name: 'reva_evaluate_tool',
     description: 'Evaluate a tool call against Reva Cedar governance policies',
     inputSchema: {
       type: 'object',
@@ -96,9 +86,9 @@ const MCP_TOOLS = [
   },
 ];
 
-// ── POST /mcp — Streamable HTTP ───────────────────────────────────
-router.post('/mcp', async (req: Request, res: Response) => {
+async function handleMcpRequest(req: Request, res: Response) {
   const user = await getMcpUser(req);
+  console.log(`[MCP] ${req.method} ${req.path} — user: ${user?.email || 'unauthorized'}`);
 
   if (!user) {
     return res.status(401).json({
@@ -109,9 +99,7 @@ router.post('/mcp', async (req: Request, res: Response) => {
   }
 
   const { method, params, id } = req.body || {};
-  console.log(`[MCP] ${method} — ${user.email}`);
 
-  // ── initialize ────────────────────────────────────────────────
   if (method === 'initialize') {
     return res.json({
       jsonrpc: '2.0',
@@ -124,41 +112,28 @@ router.post('/mcp', async (req: Request, res: Response) => {
     });
   }
 
-  // ── tools/list ────────────────────────────────────────────────
   if (method === 'tools/list') {
-    return res.json({
-      jsonrpc: '2.0',
-      result:  { tools: MCP_TOOLS },
-      id,
-    });
+    return res.json({ jsonrpc: '2.0', result: { tools: MCP_TOOLS }, id });
   }
 
-  // ── tools/call ────────────────────────────────────────────────
   if (method === 'tools/call') {
     const toolName  = params?.name;
     const toolInput = params?.arguments || {};
     const sessionId = toolInput.session_id || `mcp-${Date.now()}`;
 
-    // reva_governance_status
     if (toolName === 'reva_governance_status') {
-      const session    = sessionStore.get(sessionId);
-      const traceId    = getOrCreateSessionTrace(sessionId);
       const intentData = sessionIntentStore.get(sessionId);
-
       return res.json({
         jsonrpc: '2.0',
         result: {
           content: [{
             type: 'text',
             text: JSON.stringify({
-              session_id:    sessionId,
-              session_trace: traceId,
-              user:          user.email,
-              trust_score:   intentData?.trust_score || 70,
-              intent:        intentData?.intent || 'unknown',
-              prior_intents: intentData?.prior_intents || '',
-              tool_count:    session?.tool_count || 0,
-              status:        'active',
+              session_id:  sessionId,
+              user:        user.email,
+              trust_score: intentData?.trust_score || 70,
+              intent:      intentData?.intent || 'unknown',
+              status:      'active',
             }, null, 2),
           }],
         },
@@ -166,123 +141,68 @@ router.post('/mcp', async (req: Request, res: Response) => {
       });
     }
 
-    // reva_evaluate_prompt
     if (toolName === 'reva_evaluate_prompt') {
       const prompt    = toolInput.prompt    || '';
       const agentCid  = toolInput.agent_cid || '';
       const agentName = agentCid ? await resolveAgentName(agentCid) : 'CoworkAICodingAgent';
-
-      const result       = classifyPrompt(prompt, sessionId, user.email);
-      const history      = queryHistoryStore.get(sessionId) || [];
-      const queryHistory = history.slice(-3).join(', ');
-      const prevIntent   = sessionIntentStore.get(sessionId);
-      const priorIntents = prevIntent
-        ? `${prevIntent.prior_intents},${prevIntent.intent}`.replace(/^,/, '')
-        : '';
+      const result    = classifyPrompt(prompt, sessionId, user.email);
+      const history   = queryHistoryStore.get(sessionId) || [];
+      const prevIntent = sessionIntentStore.get(sessionId);
+      const priorIntents = prevIntent ? `${prevIntent.prior_intents},${prevIntent.intent}`.replace(/^,/, '') : '';
 
       sessionIntentStore.set(sessionId, {
-        intent:        result.intent,
-        trust_score:   result.trust_score,
-        query:         prompt.slice(0, 500),
-        prior_intents: priorIntents,
-        timestamp:     new Date().toISOString(),
+        intent: result.intent, trust_score: result.trust_score,
+        query: prompt.slice(0, 500), prior_intents: priorIntents,
+        timestamp: new Date().toISOString(),
       });
-
       history.push(prompt.slice(0, 200));
       queryHistoryStore.set(sessionId, history.slice(-10));
       getOrCreateSessionTrace(sessionId);
 
-      const cedarPayload = buildSubmitPromptPayload({
-        agentName,
-        agentId:      agentCid,
-        humanSub:     user.email,
-        clientSource: 'cowork',
-        sessionId,
-        scores:       { ...result.scores, trust_score: result.trust_score },
-        intent:       result.intent,
-        priorIntents,
-        query:        prompt,
-        queryHistory,
-      });
+      const cedarResult = await evaluateCedar(buildSubmitPromptPayload({
+        agentName, agentId: agentCid, humanSub: user.email,
+        clientSource: 'cowork', sessionId,
+        scores: { ...result.scores, trust_score: result.trust_score },
+        intent: result.intent, priorIntents,
+        query: prompt, queryHistory: history.slice(-3).join(', '),
+      }));
 
-      const cedarResult = await evaluateCedar(cedarPayload);
-      const permitted   = cedarResult.decision === 'allow';
-
-      logDecision({
-        timestamp:  new Date().toISOString(),
-        session_id: sessionId,
-        user_email: user.email,
-        tool:       'prompt',
-        server:     'cowork',
-        sensitivity: result.sensitivity,
-        effect:     permitted ? 'Permit' : 'Deny',
-        reason:     cedarResult.policy_name || (permitted ? 'Permitted' : 'Denied by Cedar'),
-      });
+      const permitted = cedarResult.decision === 'allow';
+      logDecision({ timestamp: new Date().toISOString(), session_id: sessionId, user_email: user.email, tool: 'prompt', server: 'cowork', sensitivity: result.sensitivity, effect: permitted ? 'Permit' : 'Deny', reason: cedarResult.policy_name || '' });
 
       return res.json({
         jsonrpc: '2.0',
-        result: {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              permitted,
-              effect:      permitted ? 'Permit' : 'Deny',
-              intent:      result.intent,
-              trust_score: result.trust_score,
-              cedar:       cedarResult,
-            }, null, 2),
-          }],
-        },
+        result: { content: [{ type: 'text', text: JSON.stringify({ permitted, effect: permitted ? 'Permit' : 'Deny', intent: result.intent, trust_score: result.trust_score, cedar: cedarResult }, null, 2) }] },
         id,
       });
     }
 
-    // reva_evaluate_tool
     if (toolName === 'reva_evaluate_tool') {
-      const mcpToolName  = toolInput.tool_name   || '';
-      const serverName   = toolInput.server_name || '';
-      const serverUrl    = toolInput.server_url  || '';
-      const agentCid     = toolInput.agent_cid   || '';
-      const agentName    = agentCid ? await resolveAgentName(agentCid) : 'CoworkAICodingAgent';
-
-      const sessionIntent   = sessionIntentStore.get(sessionId);
-      const promptIntent    = sessionIntent?.intent        || 'unknown';
-      const priorIntents    = sessionIntent?.prior_intents || '';
-      const query           = sessionIntent?.query         || '';
+      const mcpToolName = toolInput.tool_name || '';
+      const serverName  = toolInput.server_name || '';
+      const serverUrl   = toolInput.server_url || '';
+      const agentCid    = toolInput.agent_cid || '';
+      const agentName   = agentCid ? await resolveAgentName(agentCid) : 'CoworkAICodingAgent';
+      const sessionIntent = sessionIntentStore.get(sessionId);
       const baseSensitivity = getToolSensitivity(serverName, serverUrl, mcpToolName);
-      const result          = classifyToolCall(mcpToolName, serverName, baseSensitivity, sessionId, promptIntent);
-      const hitlKey         = `${sessionId}:${mcpToolName}`;
+      const result = classifyToolCall(mcpToolName, serverName, baseSensitivity, sessionId, sessionIntent?.intent || 'unknown');
+      const hitlKey = `${sessionId}:${mcpToolName}`;
       const hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;
-
-      const SENSITIVITY_SCOPE: Record<string, string> = {
-        low: 'MCPTool:Read', medium: 'MCPTool:Write',
-        high: 'MCPTool:Communicate', critical: 'MCPTool:Destructive',
-      };
+      const SCOPE: Record<string, string> = { low: 'MCPTool:Read', medium: 'MCPTool:Write', high: 'MCPTool:Communicate', critical: 'MCPTool:Destructive' };
 
       getOrCreateSessionTrace(sessionId);
-
-      const cedarPayload = buildCallToolPayload({
-        agentName, agentId: agentCid, toolName: mcpToolName,
-        serverName, humanSub: user.email, clientSource: 'cowork',
-        sessionId, sensitivity: result.sensitivity,
-        toolScope: SENSITIVITY_SCOPE[result.sensitivity] || 'MCPTool:Read',
+      const cedarResult = await evaluateCedar(buildCallToolPayload({
+        agentName, agentId: agentCid, toolName: mcpToolName, serverName,
+        humanSub: user.email, clientSource: 'cowork', sessionId,
+        sensitivity: result.sensitivity, toolScope: SCOPE[result.sensitivity] || 'MCPTool:Read',
         scores: { ...result.scores, trust_score: result.trust_score },
-        hitlAcknowledged, intent: result.intent, priorIntents, query,
-        queryHistory: priorIntents,
-      });
+        hitlAcknowledged, intent: result.intent,
+        priorIntents: sessionIntent?.prior_intents || '',
+        query: sessionIntent?.query || '', queryHistory: '',
+      }));
 
-      const cedarResult = await evaluateCedar(cedarPayload);
-
-      let effect: 'Permit' | 'Deny' | 'HITL' = 'Permit';
-      let reason = 'Tool call permitted';
-
-      if (cedarResult.decision === 'deny') {
-        effect = 'Deny';
-        reason = cedarResult.policy_name ? `Denied by policy: ${cedarResult.policy_name}` : 'Denied by Cedar';
-      } else if (cedarResult.decision === 'conditional_allow') {
-        effect = 'HITL';
-        reason = 'HITL required';
-      }
+      let effect: 'Permit' | 'Deny' | 'HITL' = cedarResult.decision === 'allow' ? 'Permit' : cedarResult.decision === 'conditional_allow' ? 'HITL' : 'Deny';
+      const reason = effect === 'Permit' ? 'Permitted' : cedarResult.policy_name || 'Denied by Cedar';
 
       if (effect === 'HITL' && !hitlAcknowledged) {
         (async () => {
@@ -295,45 +215,27 @@ router.post('/mcp', async (req: Request, res: Response) => {
         })();
       }
 
-      logDecision({
-        timestamp: new Date().toISOString(), session_id: sessionId,
-        user_email: user.email, tool: mcpToolName, server: serverName,
-        sensitivity: result.sensitivity, effect, reason,
-      });
+      logDecision({ timestamp: new Date().toISOString(), session_id: sessionId, user_email: user.email, tool: mcpToolName, server: serverName, sensitivity: result.sensitivity, effect, reason });
 
       return res.json({
         jsonrpc: '2.0',
-        result: {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              permitted: effect === 'Permit', effect, reason,
-              tool: mcpToolName, sensitivity: result.sensitivity,
-              trust_score: result.trust_score, hitl: effect === 'HITL',
-              cedar: cedarResult,
-            }, null, 2),
-          }],
-        },
+        result: { content: [{ type: 'text', text: JSON.stringify({ permitted: effect === 'Permit', effect, reason, tool: mcpToolName, sensitivity: result.sensitivity, trust_score: result.trust_score, cedar: cedarResult }, null, 2) }] },
         id,
       });
     }
 
-    return res.json({
-      jsonrpc: '2.0',
-      error:   { code: -32601, message: `Unknown tool: ${toolName}` },
-      id,
-    });
+    return res.json({ jsonrpc: '2.0', error: { code: -32601, message: `Unknown tool: ${toolName}` }, id });
   }
 
-  return res.json({
-    jsonrpc: '2.0',
-    error:   { code: -32601, message: `Method not found: ${method}` },
-    id,
-  });
-});
+  return res.json({ jsonrpc: '2.0', error: { code: -32601, message: `Method not found: ${method}` }, id });
+}
 
-// ── GET /mcp — SSE fallback ───────────────────────────────────────
-router.get('/mcp', async (req: Request, res: Response) => {
+// Handle both /mcp and / (Cowork uses base URL as MCP endpoint)
+router.post('/mcp', handleMcpRequest);
+router.post('/',    handleMcpRequest);
+
+// SSE for both paths
+async function handleSse(req: Request, res: Response) {
   const user = await getMcpUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -341,9 +243,10 @@ router.get('/mcp', async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.write(`data: ${JSON.stringify({ type: 'connected', server: 'reva-governance', user: user.email })}\n\n`);
-
   const keepAlive = setInterval(() => res.write(': keepalive\n\n'), 15000);
   req.on('close', () => clearInterval(keepAlive));
-});
+}
+
+router.get('/mcp', handleSse);
 
 export default router;

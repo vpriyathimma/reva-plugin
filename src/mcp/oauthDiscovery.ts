@@ -92,3 +92,14 @@ router.post('/oauth/register', (req, res) => {
 });
 
 export default router;
+
+// RFC 9728 — OAuth Protected Resource Metadata
+// Cowork calls this before OAuth to discover the resource server
+router.get('/.well-known/oauth-protected-resource', (_req, res) => {
+  res.json({
+    resource:               PLUGIN_BASE_URL,
+    authorization_servers:  [PLUGIN_BASE_URL],
+    bearer_methods_supported: ['header'],
+    resource_documentation: `${PLUGIN_BASE_URL}/mcp`,
+  });
+});
