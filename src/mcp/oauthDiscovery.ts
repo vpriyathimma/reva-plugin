@@ -50,6 +50,7 @@ router.post('/oauth/token', async (req, res) => {
       redirect_uri:  redirect_uri || `https://claude.ai/api/mcp/auth_callback`,
       client_id:     resolvedClientId,
       client_secret: resolvedClientSecret,
+      scope:         'openid profile email',
     });
 
     if (code_verifier) params.set('code_verifier', code_verifier);
