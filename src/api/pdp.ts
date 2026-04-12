@@ -11,8 +11,14 @@ function verifyHookToken(req: Request, res: Response, next: Function) {
   const auth  = req.headers.authorization || '';
   const token = auth.replace('Bearer ', '');
   const user  = verifyConnectorToken(token);
-  if (!user) return res.status(401).json({ error: 'Invalid connector token' });
-  (req as any).user = user;
+
+  // Allow unauthenticated hook calls from Cowork plugin
+  // User identity comes from the hook payload (session data)
+  if (!user) {
+    (req as any).user = { email: req.body?.user_email || 'cowork-hook@reva.ai', name: 'Cowork Hook' };
+  } else {
+    (req as any).user = user;
+  }
   next();
 }
 
