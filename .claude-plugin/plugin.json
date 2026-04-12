@@ -3,5 +3,5 @@
   "version": "1.0.0",
   "description": "Reva AI governance plugin — Cedar-enforced access control for every Cowork tool call and prompt",
   "author": "Reva AI",
-  "hooks": "hooks/hooks.json"
+  "hooks": "../hooks/hooks.json"
 }

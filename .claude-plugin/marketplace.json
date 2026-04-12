@@ -1,0 +1,12 @@
+{
+  "name": "reva-governance",
+  "description": "Reva AI governance plugin — Cedar-enforced access control for every Cowork tool call and prompt",
+  "plugins": [
+    {
+      "name": "reva-governance",
+      "path": ".",
+      "description": "Reva AI governance plugin — Cedar-enforced access control for every Cowork tool call and prompt",
+      "version": "1.0.0"
+    }
+  ]
+}
