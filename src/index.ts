@@ -22,7 +22,7 @@ import mcpServerRouter           from './mcp/mcpServer';
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -32,6 +32,18 @@ app.use(session({
   saveUninitialized: false,
   cookie: { secure: process.env.NODE_ENV === 'production', maxAge: 3600000 },
 }));
+
+// ── Request logger ────────────────────────────────────────────────
+app.use((req, _res, next) => {
+  console.log(`[REQ] ${req.method} ${req.path}`);
+  next();
+});
+
+// ── MCP OAuth discovery ───────────────────────────────────────────
+app.use(oauthDiscoveryRouter);
+
+// ── MCP server ────────────────────────────────────────────────────
+app.use(mcpServerRouter);
 
 // ── OAuth ─────────────────────────────────────────────────────────
 app.get('/oauth/authorize', authorize);
@@ -44,9 +56,7 @@ app.post('/api/discover', async (req, res) => {
     const token = authHeader.replace('Bearer ', '');
     const user  = verifyConnectorToken(token);
 
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid or expired connector token' });
-    }
+    if (!user) return res.status(401).json({ error: 'Invalid or expired connector token' });
 
     let servers;
     if (req.body.mcpServers) {
@@ -76,7 +86,6 @@ app.post('/api/discover', async (req, res) => {
         sensitivity_reason: t.sensitivity_reason,
       })),
     });
-
   } catch (err: any) {
     console.error('Discovery error:', err.message);
     return res.status(400).json({ error: err.message });
@@ -84,10 +93,6 @@ app.post('/api/discover', async (req, res) => {
 });
 
 // ── API ───────────────────────────────────────────────────────────
-app.use(oauthDiscoveryRouter);
-app.use(mcpServerRouter);
-
-// ── API ──────────────────────────────────────────────────────────
 app.use('/api', inventoryRouter);
 app.use('/api', pdpRouter);
 app.use('/api', testIdjagRouter);
@@ -97,10 +102,13 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'reva-plugin', timestamp: new Date().toISOString() });
 });
 
-// ── Dashboard (React) ─────────────────────────────────────────────
+// ── Dashboard (React) — must be LAST ─────────────────────────────
 const dashboardPath = path.join(__dirname, '../dashboard/dist');
 app.use(express.static(dashboardPath));
-app.get('*', (_req, res) => {
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/mcp') || req.path.startsWith('/.well-known') || req.path.startsWith('/oauth')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   res.sendFile(path.join(dashboardPath, 'index.html'));
 });
 
