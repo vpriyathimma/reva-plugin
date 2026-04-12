@@ -1,10 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { verifyConnectorToken } from '../connector/oauth/token';
-import { sessionStore, logDecision } from '../connector/discovery/enroll';
+import { sessionStore, logDecision, enrollSession } from '../connector/discovery/enroll';
 import { resolveAgentName } from '../api/agentResolver';
 import { evaluateCedar, buildCallToolPayload, buildSubmitPromptPayload, getOrCreateSessionTrace } from '../api/pdpEvaluate';
 import { classifyToolCall, classifyPrompt } from '../api/intentClassifier';
-import { getToolSensitivity } from '../api/knownServers';
+import { getToolSensitivity, knownServers } from '../api/knownServers';
 import { sessionIntentStore, queryHistoryStore } from '../connector/hooks/beforePrompt';
 import { hitlStore } from '../connector/hooks/beforeToolCall';
 import { triggerHITL } from '../connector/hitl/trigger';
@@ -12,6 +12,29 @@ import { pollHITL } from '../connector/hitl/poll';
 import { recordHITLApproval, recordHITLDenial } from '../connector/hitl/callback';
 
 const router = Router();
+
+// Auto-enroll session from knownServers registry when Cowork connects via MCP
+function autoEnrollSession(sessionId: string, userEmail: string): void {
+  if (sessionStore.has(sessionId)) return;
+  const tools: any[] = [];
+  for (const [, entry] of Object.entries(knownServers)) {
+    const serverUrl  = entry.url_patterns[0] ? `https://${entry.url_patterns[0]}/mcp` : '';
+    const serverType = entry.url_patterns.length === 0 ? 'stdio' : 'streamable-http';
+    for (const [toolName, toolEntry] of Object.entries(entry.tools)) {
+      tools.push({
+        server_name:        entry.display_name,
+        server_url:         serverUrl,
+        server_type:        serverType,
+        tool_name:          toolName,
+        description:        '',
+        sensitivity:        toolEntry.sensitivity,
+        sensitivity_reason: `${toolEntry.source} · intent: ${toolEntry.intent.join(', ')}`,
+      });
+    }
+  }
+  enrollSession(sessionId, userEmail, tools);
+  console.log(`[MCP] Auto-enrolled ${sessionId} for ${userEmail} — ${tools.length} tools`);
+}
 
 const OKTA_DOMAIN = process.env.OKTA_DOMAIN || 'demo-ai-auth-raah.okta.com';
 const userInfoCache = new Map<string, { email: string; name: string; expires: number }>();
@@ -101,6 +124,12 @@ async function handleMcpRequest(req: Request, res: Response) {
   const { method, params, id } = req.body || {};
 
   if (method === 'initialize') {
+    // Auto-enroll session with known MCP servers for dashboard visibility
+    const sessionId = params?.clientInfo?.name
+      ? `mcp-${user.email}-${Date.now()}`
+      : `mcp-${Date.now()}`;
+    autoEnrollSession(sessionId, user.email);
+
     return res.json({
       jsonrpc: '2.0',
       result: {
