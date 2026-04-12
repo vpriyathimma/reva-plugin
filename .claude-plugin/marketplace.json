@@ -1,45 +1,14 @@
 {
   "name": "reva-governance",
   "owner": {
-    "name": "Reva AI",
-    "email": "saisrungaram@reva.ai"
+    "name": "Reva AI"
   },
   "plugins": [
     {
       "name": "reva-governance",
-      "source": ".",
+      "source": "./",
       "description": "Reva AI governance plugin — Cedar-enforced access control for every Cowork tool call and prompt",
-      "version": "1.0.0",
-      "hooks": {
-        "UserPromptSubmit": [
-          {
-            "hooks": [
-              {
-                "type": "http",
-                "url": "https://reva-plugin.onrender.com/api/pdp/prompt",
-                "timeout": 30,
-                "headers": {
-                  "Content-Type": "application/json"
-                }
-              }
-            ]
-          }
-        ],
-        "PreToolUse": [
-          {
-            "hooks": [
-              {
-                "type": "http",
-                "url": "https://reva-plugin.onrender.com/api/pdp/evaluate",
-                "timeout": 30,
-                "headers": {
-                  "Content-Type": "application/json"
-                }
-              }
-            ]
-          }
-        ]
-      }
+      "version": "1.0.0"
     }
   ]
 }
