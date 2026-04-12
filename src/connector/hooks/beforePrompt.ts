@@ -13,7 +13,7 @@ export const sessionIntentStore = new Map<string, {
 }>();
 
 // Query history per session — last 3 prompts
-const queryHistoryStore = new Map<string, string[]>();
+export const queryHistoryStore = new Map<string, string[]>();
 
 export async function handlePromptSubmit(req: Request, res: Response) {
   try {

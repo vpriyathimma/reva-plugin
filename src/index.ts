@@ -16,6 +16,8 @@ import { verifyConnectorToken }  from './connector/oauth/token';
 import inventoryRouter           from './api/inventory';
 import pdpRouter                 from './api/pdp';
 import testIdjagRouter           from './api/testIdjag';
+import oauthDiscoveryRouter      from './mcp/oauthDiscovery';
+import mcpServerRouter           from './mcp/mcpServer';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -82,6 +84,10 @@ app.post('/api/discover', async (req, res) => {
 });
 
 // ── API ───────────────────────────────────────────────────────────
+app.use(oauthDiscoveryRouter);
+app.use(mcpServerRouter);
+
+// ── API ──────────────────────────────────────────────────────────
 app.use('/api', inventoryRouter);
 app.use('/api', pdpRouter);
 app.use('/api', testIdjagRouter);
