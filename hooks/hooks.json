@@ -8,10 +8,8 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/prompt",
             "timeout": 30,
             "headers": {
-              "Authorization": "Bearer $REVA_CONNECTOR_TOKEN",
               "Content-Type": "application/json"
-            },
-            "allowedEnvVars": ["REVA_CONNECTOR_TOKEN"]
+            }
           }
         ]
       }
@@ -24,10 +22,8 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/evaluate",
             "timeout": 30,
             "headers": {
-              "Authorization": "Bearer $REVA_CONNECTOR_TOKEN",
               "Content-Type": "application/json"
-            },
-            "allowedEnvVars": ["REVA_CONNECTOR_TOKEN"]
+            }
           }
         ]
       }
