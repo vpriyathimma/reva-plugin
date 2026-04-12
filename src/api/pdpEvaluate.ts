@@ -164,7 +164,7 @@ export function buildCallToolPayload(params: {
     },
     action:   { name: 'CallTool' },
     resource: {
-      type: 'AICodingAgents::MCPTool',
+      type: 'MCPTool',
       id:   params.toolName,
       properties: {
         tool_name:   params.toolName,
@@ -227,7 +227,7 @@ export function buildSubmitPromptPayload(params: {
     },
     action:   { name: 'SubmitPrompt' },
     resource: {
-      type: 'AICodingAgents::Prompt',
+      type: 'Prompt',
       id:   params.sessionId,
       properties: {
         session_id:    params.sessionId,
