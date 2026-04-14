@@ -22,10 +22,13 @@ export async function handlePromptSubmit(req: Request, res: Response) {
     // Allow unauthenticated hook calls from Claude Code plugin
     // User identity comes from req.body or default
 
+    // Read OS user from X-OS-User header (set by hooks.json allowedEnvVars)
+    const osUserFromHeader = (req.headers['x-os-user'] as string) || '';
+
     const {
       session_id   = `session-${Date.now()}`,
       prompt       = '',
-      user_email   = (req as any).user?.email || 'claude-code-hook@reva.ai',
+      user_email   = osUserFromHeader || (req as any).user?.email || 'claude-code-hook@reva.ai',
       agent_cid    = '',
       client_source = 'claude-code',
     } = req.body;

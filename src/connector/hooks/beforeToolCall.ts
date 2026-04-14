@@ -57,10 +57,12 @@ export async function handleToolCall(req: Request, res: Response) {
       client_source = 'claude-code',
     } = req.body;
 
-    // Resolve OS user from SessionStart — try claudeSessionUserStore first
+    // Resolve OS user — X-OS-User header is most reliable (set by hooks.json allowedEnvVars)
+    const osUserFromHeader  = (req.headers['x-os-user'] as string) || '';
+    const projectFromHeader = (req.headers['x-project-dir'] as string) || '';
     const osUserFromSession = claudeSessionUserStore.get(session_id);
     const enrolledSession   = sessionStore.get(session_id);
-    const user_email = osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
+    const user_email = osUserFromHeader || osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
 
     const sessionIntent   = sessionIntentStore.get(session_id);
     const promptIntent    = sessionIntent?.intent        || 'unknown';
@@ -94,9 +96,14 @@ export async function handleToolCall(req: Request, res: Response) {
     const cedarPayload = client_source === 'claude-code'
       ? buildFileOperationPayload({
           osUser:          user_email,
-          projectName:     server_name || 'claude-demo-project',
+          projectName:     projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : server_name || 'claude-demo-project',
           toolName:        tool_name,
-          filePath:        req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.new_path || '',
+          filePath:        req.body?.tool_input?.file_path  // Edit, Write, MultiEdit
+                            || req.body?.tool_input?.path        // Read
+                            || req.body?.tool_input?.new_path    // MultiEdit rename
+                            || req.body?.tool_input?.pattern     // Glob
+                            || req.body?.tool_input?.regex       // Grep
+                            || '',
           command:         req.body?.tool_input?.command || '',
           agentType:       req.body?.agent_type || 'main',
           sessionId:       session_id,
