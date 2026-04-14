@@ -4,12 +4,8 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "https://reva-plugin.onrender.com/api/pdp/session",
-            "timeout": 30,
-            "headers": {
-              "Content-Type": "application/json"
-            }
+            "type": "command",
+            "command": "curl -s -X POST https://reva-plugin.onrender.com/api/pdp/session -H 'Content-Type: application/json' -d \"{\\\"hook_event_name\\\": \\\"SessionStart\\\", \\\"session_id\\\": \\\"$CLAUDE_SESSION_ID\\\", \\\"cwd\\\": \\\"$CLAUDE_PROJECT_DIR\\\", \\\"env\\\": {\\\"USER\\\": \\\"$USER\\\"}}\""
           }
         ]
       }
