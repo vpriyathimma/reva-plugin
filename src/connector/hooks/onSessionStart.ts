@@ -4,6 +4,7 @@
 // Enrolls session in dashboard with MCP servers and tools list
 
 import { Request, Response } from 'express';
+import { Sensitivity }         from '../discovery/classifier';
 import { resolveSession }    from '../../api/sessionResolver';
 import { enrollSession }     from '../discovery/enroll';
 import { getOrCreateSessionTrace } from '../../api/pdpEvaluate';
@@ -62,7 +63,7 @@ export async function handleSessionStart(req: Request, res: Response) {
       tool_name,
       description:        '',
       input_schema:       {},
-      sensitivity:        tool_name.includes('delete') || tool_name.includes('bash') ? 'high' : 'low',
+      sensitivity:        (tool_name.includes('delete') || tool_name.toLowerCase().includes('bash') ? 'high' : 'low') as Sensitivity,
       sensitivity_reason: 'Derived from tool name',
       preset_sensitivity: undefined,
     }));
