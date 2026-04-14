@@ -2,6 +2,7 @@ import { Request, Response }     from 'express';
 import { classifyToolCall }      from '../../api/intentClassifier';
 import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
+import { sessionStore }          from '../discovery/enroll';
 import { getToolSensitivity }    from '../../api/knownServers';
 import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
@@ -50,10 +51,14 @@ export async function handleToolCall(req: Request, res: Response) {
       tool_name     = '',
       server_name   = '',
       server_url    = '',
-      user_email    = (req as any).user?.email || 'claude-code-hook@reva.ai',
+      user_email_body = (req as any).user?.email || '',
       agent_cid     = '',
       client_source = 'claude-code',
     } = req.body;
+
+    // Resolve OS user from SessionStart enrolled session
+    const enrolledSession = sessionStore.get(session_id);
+    const user_email = enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
 
     const sessionIntent   = sessionIntentStore.get(session_id);
     const promptIntent    = sessionIntent?.intent        || 'unknown';
@@ -89,7 +94,7 @@ export async function handleToolCall(req: Request, res: Response) {
           osUser:          user_email,
           projectName:     server_name || 'claude-demo-project',
           toolName:        tool_name,
-          filePath:        req.body?.tool_input?.file_path || req.body?.tool_input?.path || '',
+          filePath:        req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.new_path || '',
           command:         req.body?.tool_input?.command || '',
           agentType:       req.body?.agent_type || 'main',
           sessionId:       session_id,
