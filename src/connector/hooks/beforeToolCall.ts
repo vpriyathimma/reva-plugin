@@ -7,7 +7,7 @@ import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
 import { recordHITLApproval, recordHITLDenial } from '../hitl/callback';
 import { resolveAgentName }      from '../../api/agentResolver';
-import { evaluateCedar, buildCallToolPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
+import { evaluateCedar, buildCallToolPayload, buildFileOperationPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
 // Track active MCP servers discovered via PreToolUse
 export const activeMcpServers = new Map<string, Set<string>>(); // session_id → Set of server names
@@ -64,6 +64,10 @@ export async function handleToolCall(req: Request, res: Response) {
     // Track MCP server usage dynamically
     trackMcpServer(session_id, tool_name);
 
+    // Detect if this is a Claude Code native tool call (not MCP)
+    const claudeCodeTools = ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep', 'Task', 'Agent', 'WorktreeTool'];
+    const isClaudeCodeTool = claudeCodeTools.some(t => tool_name === t || tool_name.toLowerCase() === t.toLowerCase());
+
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
 
     const hitlKey          = `${session_id}:${tool_name}`;
@@ -79,23 +83,36 @@ export async function handleToolCall(req: Request, res: Response) {
     const toolScope = SENSITIVITY_SCOPE[result.sensitivity] || 'MCPTool:Read';
 
     // ── Cedar PDP evaluation ──────────────────────────────────────
-    const cedarPayload = buildCallToolPayload({
-      agentName,
-      agentId:         agent_cid,
-      toolName:        tool_name,
-      serverName:      server_name,
-      humanSub:        user_email,
-      clientSource:    client_source,
-      sessionId:       session_id,
-      sensitivity:     result.sensitivity,
-      toolScope,
-      scores:          { ...result.scores, trust_score: result.trust_score },
-      hitlAcknowledged,
-      intent:          result.intent,
-      priorIntents,
-      query,
-      queryHistory:    priorIntents,
-    });
+    // Use ClaudeCode payload builder for claude-code hooks, Cowork builder otherwise
+    const cedarPayload = client_source === 'claude-code'
+      ? buildFileOperationPayload({
+          osUser:          user_email,
+          projectName:     server_name || 'claude-demo-project',
+          toolName:        tool_name,
+          filePath:        req.body?.tool_input?.file_path || req.body?.tool_input?.path || '',
+          command:         req.body?.tool_input?.command || '',
+          agentType:       req.body?.agent_type || 'main',
+          sessionId:       session_id,
+          hitlAcknowledged,
+          scores:          { ...result.scores, trust_score: result.trust_score },
+        })
+      : buildCallToolPayload({
+          agentName,
+          agentId:         agent_cid,
+          toolName:        tool_name,
+          serverName:      server_name,
+          humanSub:        user_email,
+          clientSource:    client_source,
+          sessionId:       session_id,
+          sensitivity:     result.sensitivity,
+          toolScope,
+          scores:          { ...result.scores, trust_score: result.trust_score },
+          hitlAcknowledged,
+          intent:          result.intent,
+          priorIntents,
+          query,
+          queryHistory:    priorIntents,
+        });
 
     const cedarResult = await evaluateCedar(cedarPayload);
 
