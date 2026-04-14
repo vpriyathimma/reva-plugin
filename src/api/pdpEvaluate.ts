@@ -264,3 +264,94 @@ export function buildSubmitPromptPayload(params: {
     session_id: params.sessionId,
   };
 }
+
+// ── Claude Code file zone resolver ───────────────────────────────
+export function resolveFileZone(filePath: string): string {
+  const p = filePath.replace(/\\/g, '/');
+  if (p.includes('.env') || p.includes('secrets') || p.includes('.pem') || p.includes('.key')) return 'secrets';
+  if (p.includes('package.json') || p.includes('tsconfig') || p.includes('.claude/')) return 'config';
+  if (p.includes('tests/') || p.includes('test/') || p.includes('.test.') || p.includes('.spec.')) return 'tests';
+  if (p.includes('src/') || p.includes('lib/') || p.includes('app/')) return 'src';
+  if (p.includes('docs/') || p.includes('README')) return 'docs';
+  return 'other';
+}
+
+// ── Map Claude Code tool name to Cedar action ────────────────────
+export function mapToolToAction(toolName: string): string {
+  const t = toolName.toLowerCase();
+  if (t === 'read' || t === 'glob' || t === 'grep') return 'ReadFile';
+  if (t === 'write') return 'WriteFile';
+  if (t === 'edit' || t === 'multiedit') return 'EditFile';
+  if (t === 'bash') return 'RunBash';
+  if (t === 'task' || t === 'agent') return 'SpawnAgent';
+  if (t === 'worktreetool' || t.includes('worktree')) return 'CreateWorktree';
+  return 'ReadFile'; // default safe
+}
+
+// ── Claude Code file operation payload ───────────────────────────
+export function buildFileOperationPayload(params: {
+  osUser:           string;
+  projectName:      string;
+  toolName:         string;
+  filePath:         string;
+  command?:         string;
+  agentType:        string;
+  sessionId:        string;
+  hitlAcknowledged: boolean;
+  scores:           Record<string, any>;
+}) {
+  const fileZone   = resolveFileZone(params.filePath || params.command || '');
+  const cedarAction = mapToolToAction(params.toolName);
+  const isCommand   = cedarAction === 'RunBash';
+
+  return {
+    principal: {
+      type: params.agentType === 'subagent' ? 'Agent' : 'Developer',
+      id:   params.osUser,
+    },
+    action: { name: cedarAction },
+    resource: isCommand
+      ? {
+          type: 'Command',
+          id:   (params.command || '').slice(0, 100),
+          properties: {
+            command_text:   (params.command || '').slice(0, 200),
+            is_destructive: isDestructiveCommand(params.command || ''),
+          },
+        }
+      : {
+          type: 'File',
+          id:   params.filePath || 'unknown',
+          properties: {
+            file_path: params.filePath,
+            file_zone: fileZone,
+            sensitivity: fileZone === 'secrets' ? 'critical' : fileZone === 'src' ? 'high' : 'medium',
+          },
+        },
+    context: {
+      access_state:     'Active',
+      os_user:          params.osUser,
+      project_name:     params.projectName,
+      file_path:        params.filePath || '',
+      file_zone:        fileZone,
+      agent_type:       params.agentType,
+      tool_name:        params.toolName,
+      session_id:       params.sessionId,
+      session_trace_id: getOrCreateSessionTrace(params.sessionId),
+      hitlAcknowledged: params.hitlAcknowledged,
+      command:          params.command || '',
+      is_destructive:   isDestructiveCommand(params.command || ''),
+      trust_score:      params.scores.trust_score       ?? 70,
+      injection_score:  params.scores.injection_score   ?? 0,
+      escalation_score: params.scores.escalation_score  ?? 0,
+      exfiltration_score: params.scores.exfiltration_score ?? 0,
+      sod_violation:    params.scores.sod_violation     ?? false,
+    },
+    session_id: params.sessionId,
+  };
+}
+
+function isDestructiveCommand(cmd: string): boolean {
+  const dangerous = ['rm -rf', 'rm -f', 'drop table', 'truncate', 'delete from', 'format', 'mkfs', '> /dev/', 'dd if='];
+  return dangerous.some(d => cmd.toLowerCase().includes(d));
+}
