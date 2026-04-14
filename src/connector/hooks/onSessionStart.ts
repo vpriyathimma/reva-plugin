@@ -4,10 +4,39 @@
 // Enrolls session in dashboard with MCP servers and tools list
 
 import { Request, Response } from 'express';
-import { Sensitivity }         from '../discovery/classifier';
-import { resolveSession }    from '../../api/sessionResolver';
-import { enrollSession }     from '../discovery/enroll';
+import * as fs                    from 'fs';
+import * as path                  from 'path';
+import * as os                    from 'os';
+import { Sensitivity }            from '../discovery/classifier';
+import { resolveSession }         from '../../api/sessionResolver';
+import { enrollSession }          from '../discovery/enroll';
 import { getOrCreateSessionTrace } from '../../api/pdpEvaluate';
+
+// Read MCP servers from .mcp.json or ~/.claude.json at session start
+function discoverMcpServers(cwd: string): string[] {
+  const candidates = [
+    path.join(cwd, '.mcp.json'),
+    path.join(os.homedir(), '.claude.json'),
+  ];
+
+  for (const filePath of candidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const raw  = fs.readFileSync(filePath, 'utf8');
+      const json = JSON.parse(raw);
+
+      // .mcp.json format: { mcpServers: { name: {...} } }
+      const fromMcp = json.mcpServers ? Object.keys(json.mcpServers) : [];
+
+      // ~/.claude.json format: nested mcpServers under projects or user
+      const fromClaude = json.userMcpServers ? Object.keys(json.userMcpServers) : [];
+
+      const servers = [...new Set([...fromMcp, ...fromClaude])];
+      if (servers.length > 0) return servers;
+    } catch {}
+  }
+  return [];
+}
 
 interface SessionStartInput {
   hook_event_name: string;
@@ -28,9 +57,13 @@ export async function handleSessionStart(req: Request, res: Response) {
     const session_id    = body.session_id || `session-${Date.now()}`;
     const cwd           = body.cwd        || '';
     const os_user       = body.env?.USER  || process.env.USER || 'unknown';
-    const mcp_servers   = body.mcp_servers  || [];
     const allowed_tools = body.allowed_tools || [];
     const project_name  = cwd.split('/').pop() || '';
+
+    // Discover MCP servers from config files
+    const discovered_mcp = discoverMcpServers(cwd);
+    // Also use any passed in hook body (future proofing)
+    const mcp_servers = [...new Set([...discovered_mcp, ...(body.mcp_servers || [])])];
 
     console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd}`);
 

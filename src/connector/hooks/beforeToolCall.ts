@@ -9,6 +9,20 @@ import { recordHITLApproval, recordHITLDenial } from '../hitl/callback';
 import { resolveAgentName }      from '../../api/agentResolver';
 import { evaluateCedar, buildCallToolPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
+// Track active MCP servers discovered via PreToolUse
+export const activeMcpServers = new Map<string, Set<string>>(); // session_id → Set of server names
+
+function trackMcpServer(session_id: string, tool_name: string): void {
+  if (!tool_name.startsWith('mcp__')) return;
+  const parts = tool_name.split('__');
+  if (parts.length < 2) return;
+  const server_name = parts[1];
+  if (!activeMcpServers.has(session_id)) {
+    activeMcpServers.set(session_id, new Set());
+  }
+  activeMcpServers.get(session_id)!.add(server_name);
+}
+
 export const hitlStore = new Map<string, {
   acknowledged: boolean;
   approved_at:  string;
@@ -46,6 +60,9 @@ export async function handleToolCall(req: Request, res: Response) {
     const priorIntents    = sessionIntent?.prior_intents || '';
     const query           = sessionIntent?.query         || '';
     const baseSensitivity = getToolSensitivity(server_name, server_url, tool_name);
+
+    // Track MCP server usage dynamically
+    trackMcpServer(session_id, tool_name);
 
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
 

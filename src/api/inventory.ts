@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { activeMcpServers } from '../connector/hooks/beforeToolCall';
 import { sessionStore, decisionLog } from '../connector/discovery/enroll';
 import { knownServers, resolveServer } from './knownServers';
 
@@ -117,6 +118,7 @@ router.get('/decisions', (_req, res) => {
 // GET /api/sessions
 router.get('/sessions', (_req, res) => {
   const sessions = Array.from(sessionStore.values()).map(s => ({
+    active_mcp_servers: [...(activeMcpServers.get(s.session_id) || new Set())],
     session_id:  s.session_id,
     user_email:  s.user_email,
     enrolled_at: s.enrolled_at,
