@@ -4,6 +4,7 @@ import { handleToolCall }      from '../connector/hooks/beforeToolCall';
 import { decisionLog }         from '../connector/discovery/enroll';
 import { knownServers, updateToolEntry, resolveServer } from './knownServers';
 import { verifyConnectorToken } from '../connector/oauth/token';
+import { handleSessionStart }   from '../connector/hooks/onSessionStart';
 
 const router = Router();
 
@@ -23,6 +24,7 @@ function verifyHookToken(req: Request, res: Response, next: Function) {
 }
 
 // ── Hook endpoints ────────────────────────────────────────────────
+router.post('/pdp/session',  handleSessionStart);
 router.post('/pdp/prompt',   verifyHookToken, handlePromptSubmit);
 router.post('/pdp/evaluate', verifyHookToken, handleToolCall);
 

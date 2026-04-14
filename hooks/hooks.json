@@ -1,5 +1,19 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "https://reva-plugin.onrender.com/api/pdp/session",
+            "timeout": 30,
+            "headers": {
+              "Content-Type": "application/json"
+            }
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
