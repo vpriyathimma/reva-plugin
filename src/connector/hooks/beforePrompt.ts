@@ -19,14 +19,15 @@ export async function handlePromptSubmit(req: Request, res: Response) {
   try {
     const authHeader = req.headers.authorization || '';
     const token      = authHeader.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Missing connector token' });
+    // Allow unauthenticated hook calls from Claude Code plugin
+    // User identity comes from req.body or default
 
     const {
       session_id   = `session-${Date.now()}`,
       prompt       = '',
-      user_email   = 'unknown',
+      user_email   = (req as any).user?.email || 'claude-code-hook@reva.ai',
       agent_cid    = '',
-      client_source = 'cowork',
+      client_source = 'claude-code',
     } = req.body;
 
     // Classify intent + compute guardrail scores

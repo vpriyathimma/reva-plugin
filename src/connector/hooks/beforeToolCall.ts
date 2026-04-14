@@ -43,16 +43,16 @@ export async function handleToolCall(req: Request, res: Response) {
   try {
     const authHeader = req.headers.authorization || '';
     const token      = authHeader.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Missing connector token' });
+    // Allow unauthenticated hook calls from Claude Code plugin
 
     const {
       session_id    = `session-${Date.now()}`,
       tool_name     = '',
       server_name   = '',
       server_url    = '',
-      user_email    = 'unknown',
+      user_email    = (req as any).user?.email || 'claude-code-hook@reva.ai',
       agent_cid     = '',
-      client_source = 'cowork',
+      client_source = 'claude-code',
     } = req.body;
 
     const sessionIntent   = sessionIntentStore.get(session_id);
