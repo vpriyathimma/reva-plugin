@@ -61,8 +61,10 @@ export async function handleSessionStart(req: Request, res: Response) {
       server_type:        tool_name.startsWith('mcp__') ? 'streamable-http' : 'built-in',
       tool_name,
       description:        '',
+      input_schema:       {},
       sensitivity:        tool_name.includes('delete') || tool_name.includes('bash') ? 'high' : 'low',
       sensitivity_reason: 'Derived from tool name',
+      preset_sensitivity: undefined,
     }));
 
     // Enroll session in dashboard
