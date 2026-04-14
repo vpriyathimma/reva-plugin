@@ -3,6 +3,7 @@ import { classifyToolCall }      from '../../api/intentClassifier';
 import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
+import { claudeSessionUserStore } from './onSessionStart';
 import { getToolSensitivity }    from '../../api/knownServers';
 import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
@@ -56,9 +57,10 @@ export async function handleToolCall(req: Request, res: Response) {
       client_source = 'claude-code',
     } = req.body;
 
-    // Resolve OS user from SessionStart enrolled session
-    const enrolledSession = sessionStore.get(session_id);
-    const user_email = enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
+    // Resolve OS user from SessionStart — try claudeSessionUserStore first
+    const osUserFromSession = claudeSessionUserStore.get(session_id);
+    const enrolledSession   = sessionStore.get(session_id);
+    const user_email = osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
 
     const sessionIntent   = sessionIntentStore.get(session_id);
     const promptIntent    = sessionIntent?.intent        || 'unknown';

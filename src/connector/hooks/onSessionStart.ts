@@ -12,6 +12,9 @@ import { resolveSession }         from '../../api/sessionResolver';
 import { enrollSession }          from '../discovery/enroll';
 import { getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
+// OS user store — maps Claude Code session_id to OS user
+export const claudeSessionUserStore = new Map<string, string>();
+
 // Read MCP servers from .mcp.json or ~/.claude.json at session start
 function discoverMcpServers(cwd: string): string[] {
   const candidates = [
@@ -87,6 +90,10 @@ export async function handleSessionStart(req: Request, res: Response) {
 
     // Create session trace
     getOrCreateSessionTrace(session_id);
+
+    // Store os_user for this session so PreToolUse can resolve identity
+    claudeSessionUserStore.set(session_id, os_user);
+    console.log(`[SessionStart] Stored os_user=${os_user} for session=${session_id}`);
 
     // Build tool list for dashboard
     const tools = allowed_tools.map(tool_name => ({
