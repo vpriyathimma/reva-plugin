@@ -9,6 +9,16 @@ export interface SessionIdentity {
   allowed_projects: string[];
 }
 
+// HITL email map — OS username → Okta email for Verify push
+export const HITL_EMAIL_MAP: Record<string, string> = {
+  saisrungaram: 'sai.srungaram@reva.ai',
+  yashprakash:  'yash.prakash@reva.ai',
+};
+
+export function resolveHITLEmail(osUser: string): string {
+  return HITL_EMAIL_MAP[osUser] || osUser;
+}
+
 // Access matrix — admin controlled
 // os_user → allowed project names
 const ACCESS_MATRIX: Record<string, { display_name: string; allowed_projects: string[] }> = {

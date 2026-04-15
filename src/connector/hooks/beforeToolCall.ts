@@ -11,6 +11,16 @@ import { recordHITLApproval, recordHITLDenial } from '../hitl/callback';
 import { resolveAgentName }      from '../../api/agentResolver';
 import { evaluateCedar, buildCallToolPayload, buildFileOperationPayload, buildMCPToolPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
+// HITL user mapping — OS username → Okta email
+const HITL_MAP: Record<string, string> = {
+  saisrungaram: 'sai.srungaram@reva.ai',
+  yashprakash:  'yash.prakash@reva.ai',
+};
+
+function resolveHITLEmail(osUser: string): string {
+  return HITL_MAP[osUser] || osUser;
+}
+
 // Track active MCP servers discovered via PreToolUse
 export const activeMcpServers = new Map<string, Set<string>>(); // session_id → Set of server names
 
@@ -150,15 +160,26 @@ export async function handleToolCall(req: Request, res: Response) {
     let reason  = 'Tool call permitted';
 
     if (cedarResult.decision === 'deny') {
-      effect = 'Deny';
-      reason = cedarResult.policy_name
-        ? `Denied by policy: ${cedarResult.policy_name}`
-        : 'Denied by Cedar PDP';
-    } else if (cedarResult.decision === 'conditional_allow') {
-      effect = 'HITL';
-      reason = cedarResult.policy_name
-        ? `HITL required by policy: ${cedarResult.policy_name}`
-        : 'HITL required by Cedar PDP';
+      // If hitlAcknowledged was false — this deny may be HITL-eligible
+      // HITL-eligible: command_risk==restricted, MCPWrite, src/ write by main agent
+      const isHITLEligible = !hitlAcknowledged && (
+        result.sensitivity === 'high' ||
+        result.sensitivity === 'medium' ||
+        ['restricted'].includes(req.body?.tool_input?.command_risk || '') ||
+        isMCPTool
+      );
+
+      if (isHITLEligible) {
+        effect = 'HITL';
+        reason = cedarResult.policy_name
+          ? `HITL required by policy: ${cedarResult.policy_name}`
+          : 'HITL required — approve in Okta Verify to proceed';
+      } else {
+        effect = 'Deny';
+        reason = cedarResult.policy_name
+          ? `Denied by policy: ${cedarResult.policy_name}`
+          : 'Denied by Cedar PDP';
+      }
     }
 
     logDecision({
@@ -177,7 +198,7 @@ export async function handleToolCall(req: Request, res: Response) {
       hitlInFlight.set(hitlKey, true);
       (async () => {
         try {
-          const triggerResult = await triggerHITL(user_email, tool_name, session_id);
+          const triggerResult = await triggerHITL(resolveHITLEmail(user_email), tool_name, session_id);
           if (!triggerResult.success || !triggerResult.poll_url) {
             recordHITLDenial(session_id, tool_name, user_email, 'error');
             hitlInFlight.delete(hitlKey);
