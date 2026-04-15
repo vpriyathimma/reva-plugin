@@ -9,7 +9,7 @@ import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
 import { recordHITLApproval, recordHITLDenial } from '../hitl/callback';
 import { resolveAgentName }      from '../../api/agentResolver';
-import { evaluateCedar, buildCallToolPayload, buildFileOperationPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
+import { evaluateCedar, buildCallToolPayload, buildFileOperationPayload, buildMCPToolPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
 // Track active MCP servers discovered via PreToolUse
 export const activeMcpServers = new Map<string, Set<string>>(); // session_id → Set of server names
@@ -92,8 +92,24 @@ export async function handleToolCall(req: Request, res: Response) {
     const toolScope = SENSITIVITY_SCOPE[result.sensitivity] || 'MCPTool:Read';
 
     // ── Cedar PDP evaluation ──────────────────────────────────────
-    // Use ClaudeCode payload builder for claude-code hooks, Cowork builder otherwise
-    const cedarPayload = client_source === 'claude-code'
+    // Route MCP tools to buildMCPToolPayload
+    const isMCPTool = tool_name.startsWith('mcp__');
+    const mcpParts  = isMCPTool ? tool_name.split('__') : [];
+    const mcpServer = mcpParts[1] || '';
+    const mcpTool   = mcpParts[2] || tool_name;
+
+    const cedarPayload = (client_source === 'claude-code' && isMCPTool)
+      ? buildMCPToolPayload({
+          osUser:          user_email,
+          projectName:     projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown',
+          toolName:        mcpTool,
+          serverName:      mcpServer,
+          agentType:       req.body?.agent_type || 'main',
+          sessionId:       session_id,
+          hitlAcknowledged,
+          scores:          { ...result.scores, trust_score: result.trust_score },
+        })
+      : client_source === 'claude-code'
       ? buildFileOperationPayload({
           osUser:          user_email,
           projectName:     projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : server_name || 'claude-demo-project',

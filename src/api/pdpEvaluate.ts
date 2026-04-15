@@ -276,6 +276,31 @@ export function resolveFileZone(filePath: string): string {
   return 'other';
 }
 
+// ── Classify bash command risk tier ─────────────────────────────
+export function classifyCommand(cmd: string): 'safe' | 'restricted' | 'destructive' {
+  const c = cmd.toLowerCase().trim();
+
+  // Destructive — Deny always
+  if (/rm\s+-rf|rm\s+-f|drop\s+table|truncate|delete\s+from|mkfs|dd\s+if=|>\s*\/dev\/|kill\s+-9|pkill|rmdir/.test(c))
+    return 'destructive';
+
+  // Restricted — HITL required
+  if (/npm\s+install|pip\s+install|yarn\s+install|git\s+push|git\s+pull|git\s+merge|git\s+rebase|curl|wget|ssh\s|scp\s|docker\s+build|docker\s+run|kubectl|terraform|chmod|chown|nohup|psql|mysql|mongosh|pg_dump|mysqldump/.test(c))
+    return 'restricted';
+
+  return 'safe';
+}
+
+// ── Classify MCP tool into Cedar action tier ─────────────────────
+export function classifyMCPTool(toolName: string): 'MCPRead' | 'MCPWrite' {
+  const t = toolName.toLowerCase();
+  // Write tier — create, update, add, edit, transition, comment, worklog, draft
+  if (/create|update|add|edit|transition|comment|worklog|draft/.test(t))
+    return 'MCPWrite';
+  // Everything else — search, get, list, read, fetch, lookup, retrieve
+  return 'MCPRead';
+}
+
 // ── Map Claude Code tool name to Cedar action ────────────────────
 export function mapToolToAction(toolName: string): string {
   const t = toolName.toLowerCase();
@@ -285,6 +310,7 @@ export function mapToolToAction(toolName: string): string {
   if (t === 'bash') return 'RunBash';
   if (t === 'task' || t === 'agent') return 'SpawnAgent';
   if (t === 'worktreetool' || t.includes('worktree')) return 'CreateWorktree';
+  if (t.startsWith('mcp__')) return classifyMCPTool(t.split('__')[2] || t);
   return 'ReadFile'; // default safe
 }
 
@@ -315,8 +341,8 @@ export function buildFileOperationPayload(params: {
           type: 'Command',
           id:   (params.command || '').slice(0, 100),
           properties: {
-            command_text:   (params.command || '').slice(0, 200),
-            is_destructive: isDestructiveCommand(params.command || ''),
+            command_text: (params.command || '').slice(0, 200),
+            command_risk: classifyCommand(params.command || ''),
           },
         }
       : {
@@ -340,7 +366,7 @@ export function buildFileOperationPayload(params: {
       session_trace_id: getOrCreateSessionTrace(params.sessionId),
       hitlAcknowledged: params.hitlAcknowledged,
       command:          params.command || '',
-      is_destructive:   isDestructiveCommand(params.command || ''),
+      command_risk:     classifyCommand(params.command || ''),
       trust_score:      params.scores.trust_score       ?? 70,
       injection_score:  params.scores.injection_score   ?? 0,
       escalation_score: params.scores.escalation_score  ?? 0,
@@ -351,7 +377,50 @@ export function buildFileOperationPayload(params: {
   };
 }
 
-function isDestructiveCommand(cmd: string): boolean {
-  const dangerous = ['rm -rf', 'rm -f', 'drop table', 'truncate', 'delete from', 'format', 'mkfs', '> /dev/', 'dd if='];
-  return dangerous.some(d => cmd.toLowerCase().includes(d));
+// ── Build MCP tool Cedar payload ────────────────────────────────
+export function buildMCPToolPayload(params: {
+  osUser:           string;
+  projectName:      string;
+  toolName:         string;
+  serverName:       string;
+  agentType:        string;
+  sessionId:        string;
+  hitlAcknowledged: boolean;
+  scores:           Record<string, any>;
+}) {
+  const cedarAction = classifyMCPTool(params.toolName);
+  const mcpToolId   = `${params.serverName}__${params.toolName}`;
+
+  return {
+    principal: {
+      type: params.agentType === 'subagent' ? 'Agent' : 'Developer',
+      id:   params.osUser,
+    },
+    action: { name: cedarAction },
+    resource: {
+      type: 'MCPTool',
+      id:   mcpToolId,
+      properties: {
+        tool_name:   params.toolName,
+        server_name: params.serverName,
+        tier:        cedarAction,
+      },
+    },
+    context: {
+      access_state:     'Active',
+      os_user:          params.osUser,
+      project_name:     params.projectName,
+      tool_name:        params.toolName,
+      server_name:      params.serverName,
+      agent_type:       params.agentType,
+      session_id:       params.sessionId,
+      session_trace_id: getOrCreateSessionTrace(params.sessionId),
+      hitlAcknowledged: params.hitlAcknowledged,
+      trust_score:      params.scores.trust_score      ?? 70,
+      injection_score:  params.scores.injection_score  ?? 0,
+      escalation_score: params.scores.escalation_score ?? 0,
+      exfiltration_score: params.scores.exfiltration_score ?? 0,
+    },
+    session_id: params.sessionId,
+  };
 }
