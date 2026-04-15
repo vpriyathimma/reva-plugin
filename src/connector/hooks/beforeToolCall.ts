@@ -160,16 +160,22 @@ export async function handleToolCall(req: Request, res: Response) {
     let reason  = 'Tool call permitted';
 
     if (cedarResult.decision === 'deny') {
-      // If hitlAcknowledged was false — this deny may be HITL-eligible
-      // HITL-eligible: command_risk==restricted, MCPWrite, src/ write by main agent
-      const isHITLEligible = !hitlAcknowledged && (
-        result.sensitivity === 'high' ||
-        result.sensitivity === 'medium' ||
-        ['restricted'].includes(req.body?.tool_input?.command_risk || '') ||
-        isMCPTool
-      );
+      // Extract command_risk from payload context for bash commands
+      const commandRisk = (cedarPayload as any)?.context?.command_risk || 'safe';
+      const fileZone    = (cedarPayload as any)?.context?.file_zone    || 'other';
 
-      if (isHITLEligible) {
+      // Destructive commands and secrets → always hard deny, never HITL
+      const isHardDeny =
+        commandRisk === 'destructive' ||
+        fileZone    === 'secrets';
+
+      if (isHardDeny) {
+        effect = 'Deny';
+        reason = commandRisk === 'destructive'
+          ? 'Destructive command blocked by Reva governance policy'
+          : 'Access to secrets and environment files is blocked by Reva governance policy';
+      } else if (!hitlAcknowledged) {
+        // Everything else that Cedar denied → HITL eligible
         effect = 'HITL';
         reason = cedarResult.policy_name
           ? `HITL required by policy: ${cedarResult.policy_name}`
