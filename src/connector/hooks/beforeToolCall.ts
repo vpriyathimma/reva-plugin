@@ -193,30 +193,71 @@ export async function handleToolCall(req: Request, res: Response) {
       reason,
     });
 
-    // HITL: trigger Okta Verify push in background
+    // HITL: trigger Okta Verify push — SYNCHRONOUS — hold response until approved/denied
     if (effect === 'HITL' && !hitlInFlight.get(hitlKey)) {
       hitlInFlight.set(hitlKey, true);
-      (async () => {
-        try {
-          const triggerResult = await triggerHITL(resolveHITLEmail(user_email), tool_name, session_id);
-          if (!triggerResult.success || !triggerResult.poll_url) {
-            recordHITLDenial(session_id, tool_name, user_email, 'error');
-            hitlInFlight.delete(hitlKey);
-            return;
-          }
-          const status = await pollHITL(triggerResult.poll_url);
-          if (status === 'approved') {
-            recordHITLApproval(session_id, tool_name, user_email, triggerResult.poll_url);
-          } else {
-            const denyStatus = status === 'waiting' ? 'timeout' : status as 'denied' | 'timeout' | 'error';
-            recordHITLDenial(session_id, tool_name, user_email, denyStatus, triggerResult.poll_url);
-          }
-        } catch (err: any) {
-          console.error(`[HITL] Background error: ${err.message}`);
-        } finally {
+      try {
+        console.log(`[HITL] Triggering synchronous push for ${user_email} → ${tool_name}`);
+        const triggerResult = await triggerHITL(resolveHITLEmail(user_email), tool_name, session_id);
+
+        if (!triggerResult.success || !triggerResult.poll_url) {
+          recordHITLDenial(session_id, tool_name, user_email, 'error');
           hitlInFlight.delete(hitlKey);
+          // Fail open with warning if HITL trigger fails
+          return res.json({
+            hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+              permissionDecisionReason: 'HITL trigger failed — Okta Verify unavailable' },
+            reva: { effect: 'Deny', reason: 'HITL trigger failed', cedar: cedarResult },
+          });
         }
-      })();
+
+        // Poll synchronously — Claude Code waits for this response
+        const status = await pollHITL(triggerResult.poll_url);
+
+        if (status === 'approved') {
+          // Re-evaluate Cedar with hitlAcknowledged: true
+          recordHITLApproval(session_id, tool_name, user_email, triggerResult.poll_url);
+          hitlStore.set(hitlKey, { acknowledged: true, approved_at: new Date().toISOString(), tool_name });
+
+          // Rebuild payload with hitlAcknowledged: true and re-evaluate
+          const approvedPayload = (client_source === 'claude-code' && isMCPTool)
+            ? buildMCPToolPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown', toolName: mcpTool, serverName: mcpServer, agentType: req.body?.agent_type || 'main', sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score } })
+            : buildFileOperationPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : 'claude-demo-project', toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: req.body?.agent_type || 'main', sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score } });
+
+          const approvedCedar = await evaluateCedar(approvedPayload);
+
+          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Permit', reason: 'HITL approved — Cedar re-evaluated and permitted' });
+
+          hitlInFlight.delete(hitlKey);
+          return res.json({
+            hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
+            reva: { effect: 'Permit', reason: 'HITL approved by ' + resolveHITLEmail(user_email), hitlAcknowledged: true, cedar: approvedCedar },
+          });
+
+        } else {
+          // Denied or timed out
+          const denyStatus = status === 'waiting' ? 'timeout' : status as 'denied' | 'timeout' | 'error';
+          recordHITLDenial(session_id, tool_name, user_email, denyStatus, triggerResult.poll_url);
+          hitlInFlight.delete(hitlKey);
+
+          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Deny', reason: `HITL ${denyStatus} by ${resolveHITLEmail(user_email)}` });
+
+          return res.json({
+            hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+              permissionDecisionReason: `HITL ${denyStatus} — tool call blocked` },
+            reva: { effect: 'Deny', reason: `HITL ${denyStatus}`, cedar: cedarResult },
+          });
+        }
+
+      } catch (err: any) {
+        console.error(`[HITL] Synchronous error: ${err.message}`);
+        hitlInFlight.delete(hitlKey);
+        return res.json({
+          hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+            permissionDecisionReason: 'HITL error — tool call blocked' },
+          reva: { effect: 'Deny', reason: 'HITL error' },
+        });
+      }
     }
 
     if (effect === 'Deny') {
