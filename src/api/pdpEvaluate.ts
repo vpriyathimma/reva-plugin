@@ -311,6 +311,7 @@ export function mapToolToAction(toolName: string): string {
   if (t === 'task' || t === 'agent') return 'SpawnAgent';
   if (t === 'worktreetool' || t.includes('worktree')) return 'CreateWorktree';
   if (t.startsWith('mcp__')) return classifyMCPTool(t.split('__')[2] || t);
+  if (t === 'toolsearch' || t === 'websearch' || t === 'webfetch') return 'MCPRead';
   return 'ReadFile'; // default safe
 }
 

@@ -93,9 +93,9 @@ export async function handleToolCall(req: Request, res: Response) {
 
     // ── Cedar PDP evaluation ──────────────────────────────────────
     // Route MCP tools to buildMCPToolPayload
-    const isMCPTool = tool_name.startsWith('mcp__');
-    const mcpParts  = isMCPTool ? tool_name.split('__') : [];
-    const mcpServer = mcpParts[1] || '';
+    const isMCPTool = tool_name.startsWith('mcp__') || tool_name === 'ToolSearch' || tool_name === 'WebSearch' || tool_name === 'WebFetch';
+    const mcpParts  = tool_name.startsWith('mcp__') ? tool_name.split('__') : [];
+    const mcpServer = mcpParts[1] || 'claude-code';
     const mcpTool   = mcpParts[2] || tool_name;
 
     const cedarPayload = (client_source === 'claude-code' && isMCPTool)
