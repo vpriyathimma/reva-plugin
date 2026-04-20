@@ -308,10 +308,10 @@ export function mapToolToAction(toolName: string): string {
   if (t === 'write') return 'WriteFile';
   if (t === 'edit' || t === 'multiedit') return 'EditFile';
   if (t === 'bash') return 'RunBash';
-  if (t === 'task' || t === 'agent') return 'SpawnAgent';
+  if (t === 'task' || t === 'agent' || t === 'taskcreate' || t === 'taskupdate') return 'SpawnAgent';
   if (t === 'worktreetool' || t.includes('worktree')) return 'CreateWorktree';
   if (t.startsWith('mcp__')) return classifyMCPTool(t.split('__')[2] || t);
-  if (t === 'toolsearch' || t === 'websearch' || t === 'webfetch') return 'MCPRead';
+  if (t === 'toolsearch' || t === 'websearch' || t === 'webfetch') return 'ReadFile';
   return 'ReadFile'; // default safe
 }
 
@@ -336,6 +336,9 @@ export function buildFileOperationPayload(params: {
   // SpawnAgent resource — use session_id prefix + spawn count as stable identifier
   const sessionPrefix = params.sessionId.slice(0, 8);
 
+  // Sanitize command — Cedar entityId cannot contain newlines
+  const sanitizedCommand = (params.command || '').replace(/[\r\n]+/g, ' ').slice(0, 200);
+
   return {
     principal: {
       type: params.agentType === 'subagent' ? 'Agent' : 'Developer',
@@ -345,9 +348,9 @@ export function buildFileOperationPayload(params: {
     resource: isCommand
       ? {
           type: 'Command',
-          id:   (params.command || '').slice(0, 100),
+          id:   sanitizedCommand.slice(0, 100),
           properties: {
-            command_text: (params.command || '').slice(0, 200),
+            command_text: sanitizedCommand,
             command_risk: classifyCommand(params.command || ''),
           },
         }
@@ -380,7 +383,7 @@ export function buildFileOperationPayload(params: {
       session_id:       params.sessionId,
       session_trace_id: getOrCreateSessionTrace(params.sessionId),
       hitlAcknowledged: params.hitlAcknowledged,
-      command:          params.command || '',
+      command:          sanitizedCommand,
       command_risk:     classifyCommand(params.command || ''),
       trust_score:      params.scores.trust_score       ?? 70,
       injection_score:  params.scores.injection_score   ?? 0,

@@ -108,12 +108,12 @@ export async function handleToolCall(req: Request, res: Response) {
     trackMcpServer(session_id, tool_name);
 
     // Detect if this is a Claude Code native tool call (not MCP)
-    const claudeCodeTools = ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep', 'Task', 'Agent', 'WorktreeTool'];
+    const claudeCodeTools = ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep', 'Task', 'Agent', 'TaskCreate', 'TaskUpdate', 'WorktreeTool'];
     const isClaudeCodeTool = claudeCodeTools.some(t => tool_name === t || tool_name.toLowerCase() === t.toLowerCase());
 
     // Phase 3 — Subagent context tracking
     // When SpawnAgent fires → mark subagent context active
-    const isSpawnAgent = tool_name === 'Agent' || tool_name === 'Task';
+    const isSpawnAgent = tool_name === 'Agent' || tool_name === 'Task' || tool_name === 'TaskCreate' || tool_name === 'TaskUpdate';
     if (isSpawnAgent) {
       markSubagentActive(session_id);
     }
@@ -124,7 +124,14 @@ export async function handleToolCall(req: Request, res: Response) {
 
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
 
-    const hitlKey          = `${session_id}:${tool_name}`;
+    // HITL key includes command hash so each unique command requires its own approval
+    const rawCommand   = req.body?.tool_input?.command || '';
+    const commandHash  = rawCommand
+      ? require('crypto').createHash('md5').update(rawCommand.slice(0, 100)).digest('hex').slice(0, 8)
+      : '';
+    const hitlKey      = commandHash
+      ? `${session_id}:${tool_name}:${commandHash}`
+      : `${session_id}:${tool_name}`;
     const hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;
 
     // Resolve agent name from Okta (cached)
@@ -138,7 +145,7 @@ export async function handleToolCall(req: Request, res: Response) {
 
     // ── Cedar PDP evaluation ──────────────────────────────────────
     // Route MCP tools to buildMCPToolPayload
-    const isMCPTool = tool_name.startsWith('mcp__') || tool_name === 'ToolSearch' || tool_name === 'WebSearch' || tool_name === 'WebFetch';
+    const isMCPTool = tool_name.startsWith('mcp__');
     const mcpParts  = tool_name.startsWith('mcp__') ? tool_name.split('__') : [];
     const mcpServer = mcpParts[1] || 'claude-code';
     const mcpTool   = mcpParts[2] || tool_name;
@@ -267,7 +274,7 @@ export async function handleToolCall(req: Request, res: Response) {
           hitlInFlight.delete(hitlKey);
           return res.json({
             hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
-            reva: { effect: 'Permit', reason: 'HITL approved by ' + resolveHITLEmail(user_email), hitlAcknowledged: true, cedar: approvedCedar },
+            reva: { effect: 'Permit', reason: `HITL approved by ${resolveHITLEmail(user_email)}`, hitlAcknowledged: true, cedar: approvedCedar },
           });
 
         } else {
@@ -312,7 +319,7 @@ export async function handleToolCall(req: Request, res: Response) {
         hookSpecificOutput: {
           hookEventName:            'PreToolUse',
           permissionDecision:       'deny',
-          permissionDecisionReason: `${reason}. A push notification has been sent to your Okta Verify app. Approve it then re-submit.`,
+          permissionDecisionReason: `⏳ Waiting for approval — Okta Verify push sent to ${resolveHITLEmail(user_email)}. Please approve or reject in the Okta Verify app on your phone. Tool: ${tool_name} | Session: ${session_id.slice(0, 8)}`,
         },
         reva: { effect: 'HITL', reason, hitl_required: true, hitl_key: hitlKey, trust_score: result.trust_score, sensitivity: result.sensitivity, hitlAcknowledged, cedar: cedarResult },
       });
@@ -325,6 +332,18 @@ export async function handleToolCall(req: Request, res: Response) {
 
   } catch (err: any) {
     console.error('beforeToolCall error:', err.message);
+    // Fail-closed during subagent context — never fail open for subagents
+    const session_id_safe = req.body?.session_id || '';
+    const isSubagentCtx   = subagentContextStore.get(session_id_safe)?.active || false;
+    if (isSubagentCtx) {
+      return res.json({
+        hookSpecificOutput: {
+          hookEventName:            'PreToolUse',
+          permissionDecision:       'deny',
+          permissionDecisionReason: 'Denied by Reva Governance Policy',
+        },
+      });
+    }
     return res.json({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
   }
 }
