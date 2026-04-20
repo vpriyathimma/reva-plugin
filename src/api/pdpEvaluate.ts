@@ -330,6 +330,10 @@ export function buildFileOperationPayload(params: {
   const fileZone   = resolveFileZone(params.filePath || params.command || '');
   const cedarAction = mapToolToAction(params.toolName);
   const isCommand   = cedarAction === 'RunBash';
+  const isSpawn     = cedarAction === 'SpawnAgent' || cedarAction === 'CreateWorktree';
+
+  // SpawnAgent resource — use session_id prefix as stable identifier
+  const sessionPrefix = params.sessionId.slice(0, 8);
 
   return {
     principal: {
@@ -344,6 +348,15 @@ export function buildFileOperationPayload(params: {
           properties: {
             command_text: (params.command || '').slice(0, 200),
             command_risk: classifyCommand(params.command || ''),
+          },
+        }
+      : isSpawn
+      ? {
+          type: 'Session',
+          id:   `${sessionPrefix}-spawn`,
+          properties: {
+            session_id:  params.sessionId,
+            agent_scope: 'subagent',
           },
         }
       : {

@@ -24,6 +24,30 @@ function resolveHITLEmail(osUser: string): string {
 // Track active MCP servers discovered via PreToolUse
 export const activeMcpServers = new Map<string, Set<string>>(); // session_id → Set of server names
 
+// Subagent context store — tracks active subagent window per session
+// SpawnAgent fires → subagent_active = true
+// Next SpawnAgent or UserPromptSubmit → subagent_active = false (new turn)
+interface SubagentContext {
+  active:      boolean;
+  started_at:  string;
+  spawn_count: number; // how many agents spawned this turn
+}
+export const subagentContextStore = new Map<string, SubagentContext>();
+
+function markSubagentActive(session_id: string): void {
+  const existing = subagentContextStore.get(session_id);
+  subagentContextStore.set(session_id, {
+    active:      true,
+    started_at:  new Date().toISOString(),
+    spawn_count: (existing?.spawn_count || 0) + 1,
+  });
+  console.log(`[Subagent] Context active for session=${session_id} spawn_count=${(existing?.spawn_count || 0) + 1}`);
+}
+
+function isSubagentActive(session_id: string): boolean {
+  return subagentContextStore.get(session_id)?.active || false;
+}
+
 function trackMcpServer(session_id: string, tool_name: string): void {
   if (!tool_name.startsWith('mcp__')) return;
   const parts = tool_name.split('__');
@@ -87,6 +111,17 @@ export async function handleToolCall(req: Request, res: Response) {
     const claudeCodeTools = ['Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Glob', 'Grep', 'Task', 'Agent', 'WorktreeTool'];
     const isClaudeCodeTool = claudeCodeTools.some(t => tool_name === t || tool_name.toLowerCase() === t.toLowerCase());
 
+    // Phase 3 — Subagent context tracking
+    // When SpawnAgent fires → mark subagent context active
+    const isSpawnAgent = tool_name === 'Agent' || tool_name === 'Task';
+    if (isSpawnAgent) {
+      markSubagentActive(session_id);
+    }
+
+    // Derive agent_type from subagent context store
+    // If subagent is active AND this is NOT the SpawnAgent call itself → it is a subagent action
+    const derivedAgentType = (!isSpawnAgent && isSubagentActive(session_id)) ? 'subagent' : 'main';
+
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
 
     const hitlKey          = `${session_id}:${tool_name}`;
@@ -114,7 +149,7 @@ export async function handleToolCall(req: Request, res: Response) {
           projectName:     projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown',
           toolName:        mcpTool,
           serverName:      mcpServer,
-          agentType:       req.body?.agent_type || 'main',
+          agentType:       derivedAgentType,
           sessionId:       session_id,
           hitlAcknowledged,
           scores:          { ...result.scores, trust_score: result.trust_score },
@@ -131,7 +166,7 @@ export async function handleToolCall(req: Request, res: Response) {
                             || req.body?.tool_input?.regex       // Grep
                             || '',
           command:         req.body?.tool_input?.command || '',
-          agentType:       req.body?.agent_type || 'main',
+          agentType:       derivedAgentType,
           sessionId:       session_id,
           hitlAcknowledged,
           scores:          { ...result.scores, trust_score: result.trust_score },

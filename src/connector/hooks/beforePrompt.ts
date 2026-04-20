@@ -4,6 +4,8 @@ import { logDecision }                from '../discovery/enroll';
 import { resolveAgentName }           from '../../api/agentResolver';
 import { evaluateCedar, buildSubmitPromptPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
+import { subagentContextStore } from './beforeToolCall';
+
 export const sessionIntentStore = new Map<string, {
   intent:       string;
   trust_score:  number;
@@ -62,6 +64,16 @@ export async function handlePromptSubmit(req: Request, res: Response) {
 
     // Ensure session trace ID exists
     getOrCreateSessionTrace(session_id);
+
+    // Reset subagent context on new prompt — each developer turn starts fresh
+    if (subagentContextStore.has(session_id)) {
+      subagentContextStore.set(session_id, {
+        active:      false,
+        started_at:  new Date().toISOString(),
+        spawn_count: 0,
+      });
+      console.log(`[Subagent] Context reset for session=${session_id} on new prompt`);
+    }
 
     // ── Cedar PDP evaluation (Phase 7) ────────────────────────────
     const cedarPayload = buildSubmitPromptPayload({
