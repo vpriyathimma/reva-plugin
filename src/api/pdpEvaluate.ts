@@ -324,6 +324,7 @@ export function buildFileOperationPayload(params: {
   command?:         string;
   agentType:        string;
   sessionId:        string;
+  spawnCount?:      number;
   hitlAcknowledged: boolean;
   scores:           Record<string, any>;
 }) {
@@ -332,7 +333,7 @@ export function buildFileOperationPayload(params: {
   const isCommand   = cedarAction === 'RunBash';
   const isSpawn     = cedarAction === 'SpawnAgent' || cedarAction === 'CreateWorktree';
 
-  // SpawnAgent resource — use session_id prefix as stable identifier
+  // SpawnAgent resource — use session_id prefix + spawn count as stable identifier
   const sessionPrefix = params.sessionId.slice(0, 8);
 
   return {
@@ -353,7 +354,7 @@ export function buildFileOperationPayload(params: {
       : isSpawn
       ? {
           type: 'Session',
-          id:   `${sessionPrefix}-spawn`,
+          id:   `${sessionPrefix}-spawnagent${params.spawnCount || 1}`,
           properties: {
             session_id:  params.sessionId,
             agent_scope: 'subagent',

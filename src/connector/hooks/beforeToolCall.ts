@@ -168,6 +168,7 @@ export async function handleToolCall(req: Request, res: Response) {
           command:         req.body?.tool_input?.command || '',
           agentType:       derivedAgentType,
           sessionId:       session_id,
+          spawnCount:      subagentContextStore.get(session_id)?.spawn_count || 1,
           hitlAcknowledged,
           scores:          { ...result.scores, trust_score: result.trust_score },
         })
@@ -199,27 +200,21 @@ export async function handleToolCall(req: Request, res: Response) {
       const commandRisk = (cedarPayload as any)?.context?.command_risk || 'safe';
       const fileZone    = (cedarPayload as any)?.context?.file_zone    || 'other';
 
-      // Destructive commands and secrets → always hard deny, never HITL
+      // Destructive commands, secrets, and subagent src writes → always hard deny, never HITL
       const isHardDeny =
-        commandRisk === 'destructive' ||
-        fileZone    === 'secrets';
+        commandRisk      === 'destructive' ||
+        fileZone         === 'secrets'     ||
+        (derivedAgentType === 'subagent' && fileZone === 'src');
 
       if (isHardDeny) {
         effect = 'Deny';
-        reason = commandRisk === 'destructive'
-          ? 'Destructive command blocked by Reva governance policy'
-          : 'Access to secrets and environment files is blocked by Reva governance policy';
+        reason = 'Denied by Reva Governance Policy';
       } else if (!hitlAcknowledged) {
-        // Everything else that Cedar denied → HITL eligible
         effect = 'HITL';
-        reason = cedarResult.policy_name
-          ? `HITL required by policy: ${cedarResult.policy_name}`
-          : 'HITL required — approve in Okta Verify to proceed';
+        reason = 'HITL required — approve in Okta Verify to proceed';
       } else {
         effect = 'Deny';
-        reason = cedarResult.policy_name
-          ? `Denied by policy: ${cedarResult.policy_name}`
-          : 'Denied by Cedar PDP';
+        reason = 'Denied by Reva Governance Policy';
       }
     }
 
