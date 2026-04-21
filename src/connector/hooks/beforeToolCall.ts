@@ -63,6 +63,7 @@ export const hitlStore = new Map<string, {
   acknowledged: boolean;
   approved_at:  string;
   tool_name:    string;
+  blocked?:     boolean; // permanently blocked after timeout/denial
 }>();
 
 const hitlInFlight = new Map<string, boolean>();
@@ -133,6 +134,19 @@ export async function handleToolCall(req: Request, res: Response) {
       ? `${session_id}:${tool_name}:${commandHash}`
       : `${session_id}:${tool_name}`;
     const hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;
+    const hitlPermanentlyBlocked = hitlStore.get(hitlKey)?.blocked || false;
+
+    // If permanently blocked — return hard deny immediately without triggering HITL again
+    if (hitlPermanentlyBlocked) {
+      return res.json({
+        hookSpecificOutput: {
+          hookEventName:            'PreToolUse',
+          permissionDecision:       'deny',
+          permissionDecisionReason: `Reva Governance: This action was previously rejected or timed out. Permanently blocked for this session. Do not retry.`,
+          additionalContext:        `Reva Governance: Permanently blocked — HITL was not approved.`,
+        },
+      });
+    }
 
     // Resolve agent name from Okta (cached)
     const agentName = agent_cid ? await resolveAgentName(agent_cid) : 'CoworkAICodingAgent';
