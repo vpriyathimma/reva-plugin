@@ -204,14 +204,16 @@ export async function handleToolCall(req: Request, res: Response) {
 
     if (cedarResult.decision === 'deny') {
       // Extract command_risk from payload context for bash commands
-      const commandRisk = (cedarPayload as any)?.context?.command_risk || 'safe';
-      const fileZone    = (cedarPayload as any)?.context?.file_zone    || 'other';
+      const commandRisk    = (cedarPayload as any)?.context?.command_risk || 'safe';
+      const fileZone       = (cedarPayload as any)?.context?.file_zone    || 'other';
+      // Read agent_type from Cedar payload context — more reliable than derivedAgentType for parallel requests
+      const payloadAgentType = (cedarPayload as any)?.context?.agent_type || derivedAgentType;
 
       // Destructive commands, secrets, and subagent src writes → always hard deny, never HITL
       const isHardDeny =
         commandRisk      === 'destructive' ||
         fileZone         === 'secrets'     ||
-        (derivedAgentType === 'subagent' && fileZone === 'src');
+        (payloadAgentType === 'subagent' && fileZone === 'src');
 
       if (isHardDeny) {
         effect = 'Deny';
@@ -264,8 +266,8 @@ export async function handleToolCall(req: Request, res: Response) {
 
           // Rebuild payload with hitlAcknowledged: true and re-evaluate
           const approvedPayload = (client_source === 'claude-code' && isMCPTool)
-            ? buildMCPToolPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown', toolName: mcpTool, serverName: mcpServer, agentType: req.body?.agent_type || 'main', sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score } })
-            : buildFileOperationPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : 'claude-demo-project', toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: req.body?.agent_type || 'main', sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score } });
+            ? buildMCPToolPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown', toolName: mcpTool, serverName: mcpServer, agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score } })
+            : buildFileOperationPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : 'claude-demo-project', toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score } });
 
           const approvedCedar = await evaluateCedar(approvedPayload);
 
@@ -319,7 +321,8 @@ export async function handleToolCall(req: Request, res: Response) {
         hookSpecificOutput: {
           hookEventName:            'PreToolUse',
           permissionDecision:       'deny',
-          permissionDecisionReason: `⏳ Waiting for approval — Okta Verify push sent to ${resolveHITLEmail(user_email)}. Please approve or reject in the Okta Verify app on your phone. Tool: ${tool_name} | Session: ${session_id.slice(0, 8)}`,
+          permissionDecisionReason: `⏳ Waiting for Okta Verify approval from ${resolveHITLEmail(user_email)} — please approve or reject on your phone. Tool: ${tool_name} | Command: ${rawCommand.slice(0, 60) || 'n/a'} | Session: ${session_id.slice(0, 8)}`,
+          additionalContext:        `Reva governance: HITL approval required. Okta Verify push sent to ${resolveHITLEmail(user_email)}.`,
         },
         reva: { effect: 'HITL', reason, hitl_required: true, hitl_key: hitlKey, trust_score: result.trust_score, sensitivity: result.sensitivity, hitlAcknowledged, cedar: cedarResult },
       });

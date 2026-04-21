@@ -16,13 +16,16 @@
           {
             "type": "http",
             "url": "https://reva-plugin.onrender.com/api/pdp/prompt",
-            "timeout": 30,
+            "timeout": 60,
             "headers": {
               "Content-Type": "application/json",
               "X-OS-User": "$USER",
               "X-Project-Dir": "$CLAUDE_PROJECT_DIR"
             },
-            "allowedEnvVars": ["USER", "CLAUDE_PROJECT_DIR"]
+            "allowedEnvVars": [
+              "USER",
+              "CLAUDE_PROJECT_DIR"
+            ]
           }
         ]
       }
@@ -33,13 +36,16 @@
           {
             "type": "http",
             "url": "https://reva-plugin.onrender.com/api/pdp/evaluate",
-            "timeout": 30,
+            "timeout": 130,
             "headers": {
               "Content-Type": "application/json",
               "X-OS-User": "$USER",
               "X-Project-Dir": "$CLAUDE_PROJECT_DIR"
             },
-            "allowedEnvVars": ["USER", "CLAUDE_PROJECT_DIR"]
+            "allowedEnvVars": [
+              "USER",
+              "CLAUDE_PROJECT_DIR"
+            ]
           }
         ]
       }
