@@ -231,13 +231,13 @@ export async function handleToolCall(req: Request, res: Response) {
 
       if (isHardDeny) {
         effect = 'Deny';
-        reason = 'Denied by Reva Governance Policy';
+        reason = 'Blocked by Reva Governance Policy';
       } else if (!hitlAcknowledged) {
         effect = 'HITL';
         reason = 'HITL required — approve in Okta Verify to proceed';
       } else {
         effect = 'Deny';
-        reason = 'Denied by Reva Governance Policy';
+        reason = 'Blocked by Reva Governance Policy';
       }
     }
 
@@ -357,7 +357,7 @@ export async function handleToolCall(req: Request, res: Response) {
         hookSpecificOutput: {
           hookEventName:            'PreToolUse',
           permissionDecision:       'deny',
-          permissionDecisionReason: 'Denied by Reva Governance Policy',
+          permissionDecisionReason: 'Blocked by Reva Governance Policy',
         },
       });
     }

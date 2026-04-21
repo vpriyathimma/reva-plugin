@@ -2,7 +2,7 @@ import { Request, Response }          from 'express';
 import { classifyPrompt, recordBypassAttempt } from '../../api/intentClassifier';
 import { logDecision }                from '../discovery/enroll';
 import { resolveAgentName }           from '../../api/agentResolver';
-import { evaluateCedar, buildSubmitPromptPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
+import { evaluateCedar, buildSubmitPromptPayload, buildClaudeCodePromptPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
 import { subagentContextStore } from './beforeToolCall';
 
@@ -25,7 +25,8 @@ export async function handlePromptSubmit(req: Request, res: Response) {
     // User identity comes from req.body or default
 
     // Read OS user from X-OS-User header (set by hooks.json allowedEnvVars)
-    const osUserFromHeader = (req.headers['x-os-user'] as string) || '';
+    const osUserFromHeader  = (req.headers['x-os-user'] as string) || '';
+    const projectFromHeader = (req.headers['x-project-dir'] as string) || '';
 
     const {
       session_id   = `session-${Date.now()}`,
@@ -36,6 +37,29 @@ export async function handlePromptSubmit(req: Request, res: Response) {
     } = req.body;
 
     // Classify intent + compute guardrail scores
+    // Detect ! prefix bypass attempts — evaluate Cedar and log as policy violation
+    const isBypassAttempt = prompt.trim().startsWith('!');
+    if (isBypassAttempt) {
+      console.warn(`[BYPASS] Developer used ! command bypass: session=${session_id} user=${user_email} prompt="${prompt.slice(0, 100)}"`);
+      recordBypassAttempt(session_id);
+
+      // Evaluate Cedar for audit log
+      try {
+        const bypassPayload = buildClaudeCodePromptPayload({
+          osUser:        user_email,
+          projectName:   projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown',
+          sessionId:     session_id,
+          promptSnippet: prompt.slice(0, 200),
+          bypassAttempt: true,
+          scores:        { trust_score: 0 },
+        });
+        await evaluateCedar(bypassPayload);
+        console.log(`[BYPASS] Cedar evaluated bypass attempt for session=${session_id}`);
+      } catch (err: any) {
+        console.warn(`[BYPASS] Cedar evaluation failed: ${err.message}`);
+      }
+    }
+
     const result = classifyPrompt(prompt, session_id, user_email);
 
     // Build query history

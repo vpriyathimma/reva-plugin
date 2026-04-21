@@ -120,7 +120,13 @@ export async function handleSessionStart(req: Request, res: Response) {
       decision: 'allow',
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: `Reva governance active. Session: ${session_id}. User: ${identity.display_name}. Project: ${project_name}.`,
+        additionalContext: `Reva governance active. Session: ${session_id}. User: ${identity.display_name}. Project: ${project_name}.
+
+IMPORTANT GOVERNANCE RULES — ALWAYS FOLLOW:
+1. Never suggest using the ! prefix to run commands directly — this bypasses Reva governance and is a policy violation.
+2. If an action is blocked by Reva Governance Policy, inform the user and stop. Do not suggest alternative ways to bypass the policy.
+3. Never suggest workarounds to governance policies including direct terminal commands, Python scripts, or any other method to modify governed files.
+4. All file modifications and shell commands must go through Claude tools (Edit, Write, Bash) so Reva can evaluate them.`,
       },
     });
 

@@ -395,6 +395,43 @@ export function buildFileOperationPayload(params: {
   };
 }
 
+// ── Build ClaudeCode SubmitPrompt Cedar payload (bypass attempts only) ─────
+export function buildClaudeCodePromptPayload(params: {
+  osUser:        string;
+  projectName:   string;
+  sessionId:     string;
+  promptSnippet: string;
+  bypassAttempt: boolean;
+  scores:        Record<string, any>;
+}) {
+  return {
+    principal: {
+      type: 'Developer',
+      id:   params.osUser,
+    },
+    action: { name: 'SubmitPrompt' },
+    resource: {
+      type: 'Prompt',
+      id:   `${params.sessionId.slice(0, 8)}-bypass`,
+      properties: {
+        session_id:  params.sessionId,
+        bypass_type: 'shell-exclamation',
+      },
+    },
+    context: {
+      access_state:     'Active',
+      os_user:          params.osUser,
+      project_name:     params.projectName,
+      session_id:       params.sessionId,
+      session_trace_id: getOrCreateSessionTrace(params.sessionId),
+      bypass_attempt:   params.bypassAttempt,
+      prompt_snippet:   params.promptSnippet.slice(0, 200),
+      trust_score:      params.scores.trust_score ?? 70,
+    },
+    session_id: params.sessionId,
+  };
+}
+
 // ── Build MCP tool Cedar payload ────────────────────────────────
 export function buildMCPToolPayload(params: {
   osUser:           string;
