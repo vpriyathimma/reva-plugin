@@ -281,7 +281,7 @@ export function classifyCommand(cmd: string): 'safe' | 'restricted' | 'destructi
   const c = cmd.toLowerCase().trim();
 
   // Destructive — Deny always
-  if (/rm\s+-rf|rm\s+-f|drop\s+table|truncate|delete\s+from|mkfs|dd\s+if=|>\s*\/dev\/|kill\s+-9|pkill|rmdir/.test(c))
+  if (/\brm\s|drop\s+table|truncate|delete\s+from|mkfs|dd\s+if=|>\s*\/dev\/|kill\s+-9|pkill|rmdir/.test(c))
     return 'destructive';
 
   // Restricted — HITL required
