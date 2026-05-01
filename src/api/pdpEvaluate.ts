@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { resolveDeveloperProfile } from './sessionResolver';
 
 const REVA_PDP_URL          = process.env.REVA_PDP_URL          || '';
 const CEDAR_POLICY_STORE_ID = process.env.CEDAR_POLICY_STORE_ID || '';
@@ -30,9 +31,9 @@ function buildTraceparent(sessionTraceId: string): string {
 }
 
 export async function evaluateCedar(payload: {
-  principal:  { type: string; id: string };
+  principal:  { type: string; id: string; properties?: Record<string, any>; parents?: Array<{ type: string; id: string }> };
   action:     { name: string };
-  resource:   { type: string; id: string; properties?: Record<string, any> };
+  resource:   { type: string; id: string; properties?: Record<string, any>; parents?: Array<{ type: string; id: string }> };
   context:    Record<string, any>;
   session_id: string;
 }): Promise<CedarResult> {
@@ -41,14 +42,17 @@ export async function evaluateCedar(payload: {
   // ── Cedar payload — matches SecureBank format exactly ────────────
   const cedarPayload = [{
     subject: {
-      type: payload.principal.type,
-      id:   payload.principal.id,
+      type:       payload.principal.type,
+      id:         payload.principal.id,
+      properties: payload.principal.properties || {},
+      parents:    payload.principal.parents    || [],
     },
     action: { name: payload.action.name },
     resource: {
       type:       payload.resource.type,
       id:         payload.resource.id,
       properties: payload.resource.properties || {},
+      parents:    payload.resource.parents    || [],
     },
     context: {
       ...payload.context,
@@ -230,8 +234,7 @@ export function buildSubmitPromptPayload(params: {
       type: 'Prompt',
       id:   params.sessionId,
       properties: {
-        session_id:    params.sessionId,
-        client_source: params.clientSource,
+        session_id: params.sessionId,
       },
     },
     context: {
@@ -256,8 +259,10 @@ export function buildSubmitPromptPayload(params: {
       sod_score:             params.scores.sod_score              ?? 0,
       time_anomaly_score:    params.scores.time_anomaly_score     ?? 0,
       velocity_score:        params.scores.velocity_score         ?? 0,
+      intent_mismatch_score: params.scores.intent_mismatch_score  ?? 0,
       after_hours_score:     params.scores.after_hours_score      ?? 0,
       bypass_attempts_score: params.scores.bypass_attempts_score  ?? 0,
+      bulk_operation_score:  params.scores.bulk_operation_score   ?? 0,
       intent_pool_score:     params.scores.intent_pool_score      ?? 0,
       intent_pool_pattern:   params.scores.intent_pool_pattern    ?? 'none',
     },
@@ -315,6 +320,39 @@ export function mapToolToAction(toolName: string): string {
   return 'ReadFile'; // default safe
 }
 
+// ── Build Developer principal block with profile (for ClaudeCode policies) ──
+function buildDeveloperPrincipal(osUser: string, agentType: string) {
+  const principalType = agentType === 'subagent' ? 'Agent' : 'Developer';
+
+  // Agent principal — no Department parent, no role
+  if (principalType === 'Agent') {
+    return {
+      type: 'Agent',
+      id:   osUser,
+      properties: {
+        agent_type:        agentType,
+        parent_session_id: '',
+      },
+      parents: [],
+    };
+  }
+
+  // Developer principal — inject role/employment_type and Department parent
+  const profile = resolveDeveloperProfile(osUser);
+  return {
+    type: 'Developer',
+    id:   osUser,
+    properties: {
+      os_user:         osUser,
+      user_role:       profile.user_role,
+      employment_type: profile.employment_type,
+    },
+    parents: [
+      { type: 'Department', id: profile.department },
+    ],
+  };
+}
+
 // ── Claude Code file operation payload ───────────────────────────
 export function buildFileOperationPayload(params: {
   osUser:           string;
@@ -340,10 +378,7 @@ export function buildFileOperationPayload(params: {
   const sanitizedCommand = (params.command || '').replace(/[\r\n]+/g, ' ').slice(0, 200);
 
   return {
-    principal: {
-      type: params.agentType === 'subagent' ? 'Agent' : 'Developer',
-      id:   params.osUser,
-    },
+    principal: buildDeveloperPrincipal(params.osUser, params.agentType),
     action: { name: cedarAction },
     resource: isCommand
       ? {
@@ -382,7 +417,7 @@ export function buildFileOperationPayload(params: {
       tool_name:        params.toolName,
       session_id:       params.sessionId,
       session_trace_id: getOrCreateSessionTrace(params.sessionId),
-      hitlAcknowledged: params.hitlAcknowledged,
+      approver_consent: params.hitlAcknowledged,
       command:          sanitizedCommand,
       command_risk:     classifyCommand(params.command || ''),
       trust_score:      params.scores.trust_score       ?? 70,
@@ -405,10 +440,7 @@ export function buildClaudeCodePromptPayload(params: {
   scores:        Record<string, any>;
 }) {
   return {
-    principal: {
-      type: 'Developer',
-      id:   params.osUser,
-    },
+    principal: buildDeveloperPrincipal(params.osUser, 'main'),
     action: { name: 'SubmitPrompt' },
     resource: {
       type: 'Prompt',
@@ -447,10 +479,7 @@ export function buildMCPToolPayload(params: {
   const mcpToolId   = `${params.serverName}__${params.toolName}`;
 
   return {
-    principal: {
-      type: params.agentType === 'subagent' ? 'Agent' : 'Developer',
-      id:   params.osUser,
-    },
+    principal: buildDeveloperPrincipal(params.osUser, params.agentType),
     action: { name: cedarAction },
     resource: {
       type: 'MCPTool',
@@ -460,6 +489,9 @@ export function buildMCPToolPayload(params: {
         server_name: params.serverName,
         tier:        cedarAction,
       },
+      parents: [
+        { type: 'MCPServer', id: params.serverName },
+      ],
     },
     context: {
       access_state:     'Active',
@@ -470,7 +502,7 @@ export function buildMCPToolPayload(params: {
       agent_type:       params.agentType,
       session_id:       params.sessionId,
       session_trace_id: getOrCreateSessionTrace(params.sessionId),
-      hitlAcknowledged: params.hitlAcknowledged,
+      approver_consent: params.hitlAcknowledged,
       trust_score:      params.scores.trust_score      ?? 70,
       injection_score:  params.scores.injection_score  ?? 0,
       escalation_score: params.scores.escalation_score ?? 0,

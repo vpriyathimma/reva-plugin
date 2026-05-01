@@ -19,6 +19,36 @@ export function resolveHITLEmail(osUser: string): string {
   return HITL_EMAIL_MAP[osUser] || osUser;
 }
 
+// Developer profile — maps OS username → Cedar Developer entity attributes
+// Used to populate principal.properties and principal.parents in Cedar payloads
+// so policies can evaluate `principal in Department::"X"` and `principal.user_role`
+export interface DeveloperProfile {
+  user_role:       string;
+  employment_type: string;
+  department:      string;
+}
+
+const DEVELOPER_PROFILE: Record<string, DeveloperProfile> = {
+  saisrungaram: {
+    user_role:       'senior_engineer',
+    employment_type: 'employee',
+    department:      'engineering',
+  },
+  yashprakash: {
+    user_role:       'engineer',
+    employment_type: 'contractor',
+    department:      'engineering',
+  },
+};
+
+export function resolveDeveloperProfile(osUser: string): DeveloperProfile {
+  return DEVELOPER_PROFILE[osUser] || {
+    user_role:       'unknown',
+    employment_type: 'unknown',
+    department:      'unknown',
+  };
+}
+
 // Access matrix — admin controlled
 // os_user → allowed project names
 const ACCESS_MATRIX: Record<string, { display_name: string; allowed_projects: string[] }> = {
