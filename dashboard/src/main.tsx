@@ -306,9 +306,10 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
 }
 
 // ── Section B: MCP Discovery ─────────────────────────────────────
-function MCPDiscovery({ registry, decisions }: { registry: ServerEntry[]; decisions: Decision[] }) {
+function MCPDiscovery({ registry, decisions, mcpDiscovery }: { registry: ServerEntry[]; decisions: Decision[]; mcpDiscovery: any[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  // Merge mcpDiscovery with decision-based stats
   const serverStats = useMemo(() => {
     const stats = new Map<string, { calls: number; reads: number; writes: number; denies: number }>();
     decisions.forEach(d => {
@@ -324,30 +325,71 @@ function MCPDiscovery({ registry, decisions }: { registry: ServerEntry[]; decisi
     return stats;
   }, [decisions]);
 
-  const totalTools = registry.reduce((a, s) => a + s.tools.length, 0);
-  const criticalTools = registry.reduce((a, s) => a + (s.risk_summary.critical || 0), 0);
-  const highTools = registry.reduce((a, s) => a + (s.risk_summary.high || 0), 0);
-  const ungovernedCount = registry.filter(s => {
-    const stats = serverStats.get(s.server_name);
-    return !stats || stats.calls === 0;
-  }).length;
+  // Build unified server list from mcpDiscovery (primary) + registry (fallback)
+  const servers = useMemo(() => {
+    const map = new Map<string, any>();
+
+    // MCP probe results first
+    mcpDiscovery.forEach(s => {
+      const allTools = [
+        ...(s.tools_probed || []).map((t: any) => ({ ...t, source: 'probe' })),
+        ...(s.tools_dynamic || []).map((t: any) => ({ name: t.tool_name, sensitivity: t.sensitivity || 'medium', source: 'dynamic', call_count: t.call_count, last_called: t.last_called })),
+      ];
+      map.set(s.server_name, {
+        server_name: s.server_name,
+        server_url:  s.server_url || '',
+        status:      s.status,
+        tools:       allTools,
+        tool_count:  allTools.length,
+        probed_at:   s.probed_at,
+        latency_ms:  s.latency_ms,
+      });
+    });
+
+    // Add registry servers not already in probe results
+    registry.forEach(s => {
+      if (!map.has(s.server_name)) {
+        map.set(s.server_name, {
+          server_name: s.server_name,
+          server_url:  s.server_url || '',
+          status:      'registry',
+          tools:       s.tools.map(t => ({ name: t.name, sensitivity: t.sensitivity, source: 'registry' })),
+          tool_count:  s.tools.length,
+        });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [mcpDiscovery, registry]);
+
+  const totalTools = servers.reduce((a, s) => a + s.tool_count, 0);
+  const discoveredCount = servers.filter(s => s.status === 'discovered').length;
+  const authRequiredCount = servers.filter(s => s.status === 'auth_required').length;
+
+  const STATUS_BADGE: Record<string, { fg: string; bg: string; label: string }> = {
+    discovered:    { fg: T.green, bg: T.greenBg, label: 'Discovered' },
+    auth_required: { fg: T.amber, bg: T.amberBg, label: 'Auth Required' },
+    dynamic_only:  { fg: T.blue,  bg: T.blueBg,  label: 'Dynamic' },
+    unreachable:   { fg: T.red,   bg: T.redBg,   label: 'Unreachable' },
+    registry:      { fg: T.gray500, bg: T.gray100, label: 'Registry' },
+  };
 
   return (
     <div>
-      <SectionHeader title="MCP Discovery" sub="Servers, tools, and usage patterns across all sessions" />
+      <SectionHeader title="MCP Discovery" sub="Live tool discovery via MCP protocol + dynamic capture from usage" />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 28 }}>
-        <StatCard label="MCP Servers" value={registry.length} color={T.accent} />
+        <StatCard label="MCP Servers" value={servers.length} color={T.accent} />
         <StatCard label="Total Tools" value={totalTools} />
-        <StatCard label="Critical / High" value={`${criticalTools} / ${highTools}`} color={criticalTools > 0 ? T.red : T.amber} />
-        <StatCard label="Ungoverned" value={ungovernedCount} sub="No policy coverage" color={ungovernedCount > 0 ? T.red : T.green} />
+        <StatCard label="Discovered (live)" value={discoveredCount} sub={`via tools/list`} color={T.green} />
+        <StatCard label="Auth Required" value={authRequiredCount} sub="tools captured on use" color={authRequiredCount > 0 ? T.amber : T.green} />
       </div>
 
-      {registry.length === 0 ? <EmptyState message="No MCP servers enrolled yet." /> : (
+      {servers.length === 0 ? <EmptyState message="No MCP servers discovered. Start a Claude Code session to trigger probe." /> : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {registry.map(server => {
+          {servers.map(server => {
             const stats = serverStats.get(server.server_name);
             const isExpanded = expanded === server.server_name;
-            const riskBars = ['critical', 'high', 'medium', 'low'].filter(l => server.risk_summary[l] > 0);
+            const statusBadge = STATUS_BADGE[server.status] || STATUS_BADGE.registry;
             return (
               <div key={server.server_name} style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
                 <div onClick={() => setExpanded(isExpanded ? null : server.server_name)}
@@ -355,41 +397,50 @@ function MCPDiscovery({ registry, decisions }: { registry: ServerEntry[]; decisi
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <span style={{ fontWeight: 600, fontSize: 14 }}>{server.server_name}</span>
-                      <span style={{ fontSize: 11, color: T.gray400, background: T.gray100, padding: '2px 8px', borderRadius: 4 }}>{server.server_type}</span>
+                      <Badge text={statusBadge.label} fg={statusBadge.fg} bg={statusBadge.bg} />
+                      <span style={{ fontSize: 11, color: T.gray400 }}>{server.tool_count} tools</span>
                     </div>
                     {server.server_url && <div style={{ fontSize: 11, color: T.gray400, fontFamily: T.mono, marginTop: 4 }}>{server.server_url}</div>}
                   </div>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    {riskBars.map(l => (
-                      <span key={l} style={{ fontSize: 11, fontWeight: 600, color: SENSITIVITY_COLORS[l].fg, background: SENSITIVITY_COLORS[l].bg, padding: '2px 8px', borderRadius: 4 }}>
-                        {l[0].toUpperCase()}{server.risk_summary[l]}
-                      </span>
-                    ))}
-                    {stats && <span style={{ fontSize: 11, color: T.gray400, marginLeft: 8 }}>{stats.calls} calls</span>}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {stats && <span style={{ fontSize: 11, color: T.gray500 }}>{stats.calls} calls</span>}
+                    {stats && stats.denies > 0 && <span style={{ fontSize: 11, color: T.red, fontWeight: 600 }}>{stats.denies} denied</span>}
+                    {server.latency_ms > 0 && <span style={{ fontSize: 11, color: T.gray400 }}>{server.latency_ms}ms</span>}
                   </div>
                   <span style={{ color: T.gray400, fontSize: 12, transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
                 </div>
 
                 {isExpanded && (
-                  <div style={{ borderTop: `1px solid ${T.gray200}`, padding: '0' }}>
-                    <table style={tableStyle}>
-                      <thead><tr>
-                        {['Tool Name', 'Sensitivity', 'Source', 'Calls', 'Denies'].map(h => <th key={h} style={thStyle}>{h}</th>)}
-                      </tr></thead>
-                      <tbody>{server.tools.map((tool, i) => {
-                        const toolDecisions = decisions.filter(d => d.tool === tool.name || d.tool?.includes(tool.name));
-                        const toolDenies = toolDecisions.filter(d => d.effect === 'Deny').length;
-                        return (
-                          <tr key={i}>
-                            <td style={{ ...tdStyle, ...monoStyle }}>{tool.name}</td>
-                            <td style={tdStyle}><SensitivityBadge level={tool.sensitivity} /></td>
-                            <td style={tdStyle}><span style={{ fontSize: 11, color: T.gray500 }}>{tool.sensitivity_reason || tool.source || '—'}</span></td>
-                            <td style={tdStyle}>{toolDecisions.length}</td>
-                            <td style={tdStyle}>{toolDenies > 0 ? <span style={{ color: T.red, fontWeight: 600 }}>{toolDenies}</span> : '0'}</td>
-                          </tr>
-                        );
-                      })}</tbody>
-                    </table>
+                  <div style={{ borderTop: `1px solid ${T.gray200}` }}>
+                    {server.tools.length === 0 ? (
+                      <div style={{ padding: '20px', color: T.gray400, fontSize: 13, textAlign: 'center' }}>
+                        {server.status === 'auth_required' ? 'Tools will appear here as they are used. Auth required for full probe.' : 'No tools discovered yet.'}
+                      </div>
+                    ) : (
+                      <table style={tableStyle}>
+                        <thead><tr>
+                          {['Tool Name', 'Sensitivity', 'Source', 'Calls', 'Description'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+                        </tr></thead>
+                        <tbody>{server.tools.map((tool: any, i: number) => {
+                          const toolDecisions = decisions.filter(d => d.tool?.includes(tool.name));
+                          return (
+                            <tr key={i}>
+                              <td style={{ ...tdStyle, ...monoStyle, fontSize: 11 }}>{tool.name}</td>
+                              <td style={tdStyle}><SensitivityBadge level={tool.sensitivity} /></td>
+                              <td style={tdStyle}>
+                                <Badge
+                                  text={tool.source}
+                                  fg={tool.source === 'probe' ? T.green : tool.source === 'dynamic' ? T.blue : T.gray500}
+                                  bg={tool.source === 'probe' ? T.greenBg : tool.source === 'dynamic' ? T.blueBg : T.gray100}
+                                />
+                              </td>
+                              <td style={tdStyle}>{tool.call_count || toolDecisions.length || 0}</td>
+                              <td style={{ ...tdStyle, fontSize: 11, color: T.gray500, maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tool.description || '—'}</td>
+                            </tr>
+                          );
+                        })}</tbody>
+                      </table>
+                    )}
                   </div>
                 )}
               </div>
@@ -862,18 +913,20 @@ function App() {
   const [tab, setTab] = useState<TabKey>('inventory');
   const [loading, setLoading] = useState(true);
   const [registry, setRegistry] = useState<ServerEntry[]>([]);
+  const [mcpDiscovery, setMcpDiscovery] = useState<any[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [reg, sess, dec] = await Promise.all([
-          fetchJSON('/api/registry'), fetchJSON('/api/sessions'), fetchJSON('/api/decisions'),
+        const [reg, sess, dec, mcpDisc] = await Promise.all([
+          fetchJSON('/api/registry'), fetchJSON('/api/sessions'), fetchJSON('/api/decisions'), fetchJSON('/api/mcp-discovery'),
         ]);
         setRegistry(reg.registry || []);
         setSessions(sess.sessions || []);
         setDecisions(dec.decisions || []);
+        setMcpDiscovery(mcpDisc.servers || []);
       } catch (e) { console.error('Load error:', e); }
       finally { setLoading(false); }
     };
@@ -938,7 +991,7 @@ function App() {
         ) : (
           <>
             {tab === 'inventory' && <ClaudeCodeAgents sessions={sessions} decisions={decisions} />}
-            {tab === 'discovery' && <MCPDiscovery registry={registry} decisions={decisions} />}
+            {tab === 'discovery' && <MCPDiscovery registry={registry} decisions={decisions} mcpDiscovery={mcpDiscovery} />}
             {tab === 'analytics' && <UsageAnalytics decisions={decisions} sessions={sessions} />}
             {tab === 'admin' && <AdminConfig />}
           </>
