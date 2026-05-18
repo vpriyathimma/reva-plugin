@@ -49,6 +49,36 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "https://reva-plugin.onrender.com/api/pdp/post-tool",
+            "timeout": 30,
+            "headers": {
+              "Content-Type": "application/json",
+              "X-OS-User": "$USER",
+              "X-Project-Dir": "$CLAUDE_PROJECT_DIR"
+            },
+            "allowedEnvVars": [
+              "USER",
+              "CLAUDE_PROJECT_DIR"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -X POST https://reva-plugin.onrender.com/api/pdp/stop -H 'Content-Type: application/json' -H 'X-OS-User: $USER' -d \"{\\\"session_id\\\": \\\"$CLAUDE_SESSION_ID\\\"}\" > /dev/null 2>&1; exit 0"
+          }
+        ]
+      }
     ]
   }
 }

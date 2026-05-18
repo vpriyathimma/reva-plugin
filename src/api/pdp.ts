@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { handlePromptSubmit }  from '../connector/hooks/beforePrompt';
 import { handleToolCall }      from '../connector/hooks/beforeToolCall';
+import { handlePostToolUse, auditLog }   from '../connector/hooks/postToolUse';
+import { handleSessionEnd, sessionSummaries }   from '../connector/hooks/sessionEnd';
 import { decisionLog }         from '../connector/discovery/enroll';
 import { knownServers, updateToolEntry, resolveServer } from './knownServers';
 import { verifyConnectorToken } from '../connector/oauth/token';
@@ -24,9 +26,23 @@ function verifyHookToken(req: Request, res: Response, next: Function) {
 }
 
 // ── Hook endpoints ────────────────────────────────────────────────
-router.post('/pdp/session',  handleSessionStart);
-router.post('/pdp/prompt',   verifyHookToken, handlePromptSubmit);
-router.post('/pdp/evaluate', verifyHookToken, handleToolCall);
+router.post('/pdp/session',    handleSessionStart);
+router.post('/pdp/prompt',     verifyHookToken, handlePromptSubmit);
+router.post('/pdp/evaluate',   verifyHookToken, handleToolCall);
+router.post('/pdp/post-tool',  verifyHookToken, handlePostToolUse);
+router.post('/pdp/stop',       verifyHookToken, handleSessionEnd);
+
+// ── Audit log (PostToolUse data) ──────────────────────────────────
+router.get('/pdp/audit-log', (_req, res) => {
+  const recent = [...auditLog].reverse().slice(0, 100);
+  res.json({ audit: recent, total: auditLog.length });
+});
+
+// ── Session summaries (SessionEnd data) ───────────────────────────
+router.get('/pdp/summaries', (_req, res) => {
+  const recent = [...sessionSummaries].reverse().slice(0, 50);
+  res.json({ summaries: recent, total: sessionSummaries.length });
+});
 
 // ── Decision feed ─────────────────────────────────────────────────
 router.get('/pdp/decisions', verifyHookToken, (_req, res) => {
