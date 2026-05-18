@@ -1,56 +1,53 @@
 // SessionStart hook handler
 // Fires when Claude Code session begins
 // Validates: OS user, project access, cwd
-// Enrolls session in dashboard with MCP servers and tools list
+// Enrolls session with: agent_id, OS, hostname, model, MCP servers
 
 import { Request, Response } from 'express';
-import * as fs                    from 'fs';
-import * as path                  from 'path';
-import * as os                    from 'os';
-import { Sensitivity }            from '../discovery/classifier';
-import { resolveSession }         from '../../api/sessionResolver';
-import { enrollSession }          from '../discovery/enroll';
+import { createHash }       from 'crypto';
+import { Sensitivity }       from '../discovery/classifier';
+import { resolveSession }    from '../../api/sessionResolver';
+import { enrollSession }     from '../discovery/enroll';
 import { getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 
 // OS user store — maps Claude Code session_id to OS user
 export const claudeSessionUserStore = new Map<string, string>();
 
-// Read MCP servers from .mcp.json or ~/.claude.json at session start
-function discoverMcpServers(cwd: string): string[] {
-  const candidates = [
-    path.join(cwd, '.mcp.json'),
-    path.join(os.homedir(), '.claude.json'),
-  ];
+// Agent ID store — maps os_user:hostname → synthetic agent ID
+const agentIdStore = new Map<string, string>();
 
-  for (const filePath of candidates) {
-    try {
-      if (!fs.existsSync(filePath)) continue;
-      const raw  = fs.readFileSync(filePath, 'utf8');
-      const json = JSON.parse(raw);
+function generateAgentId(osUser: string, hostname: string): string {
+  const existing = agentIdStore.get(`${osUser}:${hostname}`);
+  if (existing) return existing;
+  const hash = createHash('sha256').update(`${osUser}:${hostname}`).digest('hex').slice(0, 12);
+  const id = `agent-${hash}`;
+  agentIdStore.set(`${osUser}:${hostname}`, id);
+  return id;
+}
 
-      // .mcp.json format: { mcpServers: { name: {...} } }
-      const fromMcp = json.mcpServers ? Object.keys(json.mcpServers) : [];
-
-      // ~/.claude.json format: nested mcpServers under projects or user
-      const fromClaude = json.userMcpServers ? Object.keys(json.userMcpServers) : [];
-
-      const servers = [...new Set([...fromMcp, ...fromClaude])];
-      if (servers.length > 0) return servers;
-    } catch {}
-  }
-  return [];
+// Parse MCP servers from mcp_config JSON (sent by curl from local .mcp.json)
+function parseMcpServers(mcpConfig: any): string[] {
+  if (!mcpConfig || typeof mcpConfig !== 'object') return [];
+  // .mcp.json format: { mcpServers: { name: {...} } }
+  const fromMcp = mcpConfig.mcpServers ? Object.keys(mcpConfig.mcpServers) : [];
+  // Also handle flat format
+  const fromFlat = Object.keys(mcpConfig).filter(k => k !== 'mcpServers');
+  return [...new Set([...fromMcp, ...fromFlat])].filter(s => s.length > 0);
 }
 
 interface SessionStartInput {
   hook_event_name: string;
   session_id:      string;
   cwd:             string;
-  // env vars passed by Claude Code
   env?: Record<string, string>;
-  // MCP servers active in this session
-  mcp_servers?: string[];
-  // Tools allowed in this session
-  allowed_tools?: string[];
+  // Enriched fields from curl (Option B)
+  os_type?:      string;
+  hostname?:     string;
+  model?:        string;
+  mcp_config?:   any;
+  // Legacy fields
+  mcp_servers?:    string[];
+  allowed_tools?:  string[];
 }
 
 export async function handleSessionStart(req: Request, res: Response) {
@@ -63,20 +60,26 @@ export async function handleSessionStart(req: Request, res: Response) {
     const allowed_tools = body.allowed_tools || [];
     const project_name  = cwd.split('/').pop() || '';
 
-    // Discover MCP servers from config files
-    const discovered_mcp = discoverMcpServers(cwd);
-    // Also use any passed in hook body (future proofing)
-    const mcp_servers = [...new Set([...discovered_mcp, ...(body.mcp_servers || [])])];
+    // Enriched fields from curl command
+    const os_type  = body.os_type  || '';
+    const hostname = body.hostname || '';
+    const model    = body.model    || '';
 
-    console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd}`);
+    // Parse MCP servers from local .mcp.json (Option B)
+    const mcpFromConfig = parseMcpServers(body.mcp_config);
+    const mcpFromBody   = body.mcp_servers || [];
+    const mcp_servers   = [...new Set([...mcpFromConfig, ...mcpFromBody])];
+
+    // Generate synthetic agent ID (deterministic per user+machine)
+    const agent_id = generateAgentId(os_user, hostname || 'localhost');
+
+    console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} agent=${agent_id} mcp=[${mcp_servers.join(',')}]`);
 
     // Resolve identity and access
     const { allowed, identity, reason } = resolveSession(os_user, cwd);
 
     if (!allowed) {
       console.warn(`[SessionStart] DENIED — ${reason}`);
-
-      // Exit code 2 blocks the session in Claude Code
       return res.status(200).json({
         decision:  'block',
         reason,
@@ -93,7 +96,6 @@ export async function handleSessionStart(req: Request, res: Response) {
 
     // Store os_user for this session so PreToolUse can resolve identity
     claudeSessionUserStore.set(session_id, os_user);
-    console.log(`[SessionStart] Stored os_user=${os_user} for session=${session_id}`);
 
     // Build tool list for dashboard
     const tools = allowed_tools.map(tool_name => ({
@@ -108,19 +110,24 @@ export async function handleSessionStart(req: Request, res: Response) {
       preset_sensitivity: undefined,
     }));
 
-    // Enroll session in dashboard
-    enrollSession(session_id, os_user, tools);
+    // Enroll session with enriched data
+    enrollSession(session_id, os_user, tools, {
+      agent_id,
+      os_type:  os_type || undefined,
+      hostname: hostname || undefined,
+      model:    model || undefined,
+      mcp_servers_discovered: mcp_servers.length > 0 ? mcp_servers : undefined,
+      project_name: project_name || undefined,
+    });
 
     console.log(`[SessionStart] ALLOWED — ${reason}`);
     console.log(`[SessionStart] MCP servers: ${mcp_servers.join(', ') || 'none'}`);
-    console.log(`[SessionStart] Tools: ${allowed_tools.length}`);
 
-    // Return allow — session proceeds
     return res.status(200).json({
       decision: 'allow',
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: `Reva governance active. Session: ${session_id}. User: ${identity.display_name}. Project: ${project_name}.
+        additionalContext: `Reva governance active. Session: ${session_id}. User: ${identity.display_name}. Project: ${project_name}. Agent: ${agent_id}.
 
 IMPORTANT GOVERNANCE RULES — ALWAYS FOLLOW:
 1. Never suggest using the ! prefix to run commands directly — this bypasses Reva governance and is a policy violation.
@@ -132,7 +139,6 @@ IMPORTANT GOVERNANCE RULES — ALWAYS FOLLOW:
 
   } catch (err: any) {
     console.error('[SessionStart] Error:', err.message);
-    // On error — allow session to proceed (fail open for SessionStart)
     return res.status(200).json({ decision: 'allow' });
   }
 }

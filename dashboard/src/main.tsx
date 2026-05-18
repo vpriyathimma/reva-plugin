@@ -24,6 +24,8 @@ interface Decision {
 interface Session {
   session_id: string; user_email: string; enrolled_at: string;
   tool_count: number; locked: boolean; active_mcp_servers?: string[];
+  agent_id?: string; os_type?: string; hostname?: string;
+  model?: string; project_name?: string; mcp_servers_discovered?: string[];
 }
 
 interface ServerEntry {
@@ -151,17 +153,34 @@ function timeAgo(ts: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-// ── Section A: Agent Inventory ───────────────────────────────────
-function AgentInventory({ sessions, decisions }: { sessions: Session[]; decisions: Decision[] }) {
+// ── Section A: Claude Code Agents ─────────────────────────────────
+function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisions: Decision[] }) {
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+
   const agents = useMemo(() => {
-    const map = new Map<string, { user: string; sessions: Session[]; lastSeen: string; totalDecisions: number; denyCount: number; mcpServers: Set<string> }>();
+    const map = new Map<string, {
+      user: string; agent_id: string; os_type: string; hostname: string; model: string;
+      sessions: Session[]; lastSeen: string; totalDecisions: number; denyCount: number;
+      mcpServers: Set<string>; projects: Set<string>;
+    }>();
     sessions.forEach(s => {
       const key = s.user_email;
-      if (!map.has(key)) map.set(key, { user: key, sessions: [], lastSeen: s.enrolled_at, totalDecisions: 0, denyCount: 0, mcpServers: new Set() });
+      if (!map.has(key)) map.set(key, {
+        user: key, agent_id: '', os_type: '', hostname: '', model: '',
+        sessions: [], lastSeen: s.enrolled_at, totalDecisions: 0, denyCount: 0,
+        mcpServers: new Set(), projects: new Set(),
+      });
       const entry = map.get(key)!;
       entry.sessions.push(s);
       if (new Date(s.enrolled_at) > new Date(entry.lastSeen)) entry.lastSeen = s.enrolled_at;
+      // Take latest non-empty values
+      if (s.agent_id) entry.agent_id = s.agent_id;
+      if (s.os_type) entry.os_type = s.os_type;
+      if (s.hostname) entry.hostname = s.hostname;
+      if (s.model) entry.model = s.model;
+      if (s.project_name) entry.projects.add(s.project_name);
       (s.active_mcp_servers || []).forEach(m => entry.mcpServers.add(m));
+      (s.mcp_servers_discovered || []).forEach(m => entry.mcpServers.add(m));
     });
     decisions.forEach(d => {
       const entry = map.get(d.user_email);
@@ -173,12 +192,19 @@ function AgentInventory({ sessions, decisions }: { sessions: Session[]; decision
     return Array.from(map.values());
   }, [sessions, decisions]);
 
-  const onlineThreshold = 30 * 60 * 1000; // 30 min
+  const onlineThreshold = 30 * 60 * 1000;
   const onlineCount = agents.filter(a => Date.now() - new Date(a.lastSeen).getTime() < onlineThreshold).length;
+
+  const detailRow = (label: string, value: string | React.ReactNode) => (
+    <div style={{ display: 'flex', padding: '8px 0', borderBottom: `1px solid ${T.gray100}` }}>
+      <div style={{ width: 160, fontSize: 12, color: T.gray400, fontWeight: 500, flexShrink: 0 }}>{label}</div>
+      <div style={{ fontSize: 13, color: T.gray900 }}>{value}</div>
+    </div>
+  );
 
   return (
     <div>
-      <SectionHeader title="Agent Inventory" sub="All discovered Claude Code instances tied to developers" />
+      <SectionHeader title="Claude Code Agents" sub="All discovered Claude Code instances tied to developers" />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 28 }}>
         <StatCard label="Total Developers" value={agents.length} color={T.accent} />
         <StatCard label="Online Now" value={onlineCount} sub="Last 30 minutes" color={T.green} />
@@ -187,34 +213,92 @@ function AgentInventory({ sessions, decisions }: { sessions: Session[]; decision
       </div>
 
       {agents.length === 0 ? <EmptyState message="No agents discovered yet. Start a Claude Code session to populate." /> : (
-        <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
-          <table style={tableStyle}>
-            <thead><tr>
-              {['Developer', 'Status', 'Sessions', 'Last Seen', 'MCP Servers', 'Decisions', 'Deny Rate'].map(h => <th key={h} style={thStyle}>{h}</th>)}
-            </tr></thead>
-            <tbody>{agents.map(a => {
-              const isOnline = Date.now() - new Date(a.lastSeen).getTime() < onlineThreshold;
-              const denyRate = a.totalDecisions > 0 ? Math.round((a.denyCount / a.totalDecisions) * 100) : 0;
-              return (
-                <tr key={a.user}>
-                  <td style={tdStyle}><span style={{ fontWeight: 600 }}>{a.user}</span></td>
-                  <td style={tdStyle}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: isOnline ? T.green : T.gray300 }} />
-                      <span style={{ fontSize: 12, color: isOnline ? T.green : T.gray400 }}>{isOnline ? 'Online' : 'Offline'}</span>
-                    </span>
-                  </td>
-                  <td style={tdStyle}>{a.sessions.length}</td>
-                  <td style={{ ...tdStyle, color: T.gray500, fontSize: 12 }}>{timeAgo(a.lastSeen)}</td>
-                  <td style={tdStyle}>{a.mcpServers.size > 0 ? Array.from(a.mcpServers).map(s => <span key={s} style={{ ...monoStyle, display: 'inline-block', background: T.gray100, padding: '1px 8px', borderRadius: 4, marginRight: 4, fontSize: 11 }}>{s}</span>) : <span style={{ color: T.gray400, fontSize: 12 }}>—</span>}</td>
-                  <td style={tdStyle}>{a.totalDecisions}</td>
-                  <td style={tdStyle}>
-                    <span style={{ fontWeight: 600, color: denyRate > 20 ? T.red : denyRate > 5 ? T.amber : T.green }}>{denyRate}%</span>
-                  </td>
-                </tr>
-              );
-            })}</tbody>
-          </table>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {agents.map(a => {
+            const isOnline = Date.now() - new Date(a.lastSeen).getTime() < onlineThreshold;
+            const denyRate = a.totalDecisions > 0 ? Math.round((a.denyCount / a.totalDecisions) * 100) : 0;
+            const isExpanded = expandedAgent === a.user;
+            return (
+              <div key={a.user} style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
+                <div onClick={() => setExpandedAgent(isExpanded ? null : a.user)}
+                  style={{ padding: '16px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: isOnline ? T.greenBg : T.gray100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ fontSize: 14, color: isOnline ? T.green : T.gray400 }}>◉</span>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ fontWeight: 600, fontSize: 14 }}>{a.user}</span>
+                      <span style={{ fontSize: 11, color: isOnline ? T.green : T.gray400 }}>{isOnline ? 'Online' : 'Offline'}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: T.gray400, marginTop: 2 }}>
+                      {a.agent_id && <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 12 }}>{a.agent_id}</span>}
+                      {a.model ? a.model : 'plan default'} · {a.os_type || '—'} · {a.sessions.length} session{a.sessions.length !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 16, fontWeight: 700 }}>{a.totalDecisions}</div>
+                      <div style={{ fontSize: 10, color: T.gray400 }}>decisions</div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: denyRate > 20 ? T.red : denyRate > 5 ? T.amber : T.green }}>{denyRate}%</div>
+                      <div style={{ fontSize: 10, color: T.gray400 }}>deny rate</div>
+                    </div>
+                  </div>
+                  <span style={{ color: T.gray400, fontSize: 12, transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+                </div>
+
+                {isExpanded && (
+                  <div style={{ borderTop: `1px solid ${T.gray200}`, padding: '16px 20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Agent Details</div>
+                        {detailRow('Agent ID', <span style={{ fontFamily: T.mono, fontSize: 12 }}>{a.agent_id || '—'}</span>)}
+                        {detailRow('Developer', a.user)}
+                        {detailRow('Owner', a.user)}
+                        {detailRow('Operating System', a.os_type || '—')}
+                        {detailRow('Hostname', a.hostname || '—')}
+                        {detailRow('Model', a.model || 'plan default')}
+                        {detailRow('Last Active', timeAgo(a.lastSeen))}
+                        {detailRow('Status', <span style={{ color: isOnline ? T.green : T.gray400, fontWeight: 600 }}>{isOnline ? 'Online' : 'Offline'}</span>)}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Activity</div>
+                        {detailRow('Sessions', String(a.sessions.length))}
+                        {detailRow('Projects', a.projects.size > 0 ? Array.from(a.projects).join(', ') : '—')}
+                        {detailRow('Total Decisions', String(a.totalDecisions))}
+                        {detailRow('Deny Rate', <span style={{ fontWeight: 600, color: denyRate > 20 ? T.red : T.green }}>{denyRate}%</span>)}
+                        {detailRow('MCP Servers', a.mcpServers.size > 0
+                          ? <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{Array.from(a.mcpServers).map(s => <span key={s} style={{ fontFamily: T.mono, fontSize: 11, background: T.gray100, padding: '1px 8px', borderRadius: 4 }}>{s}</span>)}</div>
+                          : '—'
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Session History */}
+                    <div style={{ marginTop: 20 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Session History</div>
+                      <table style={tableStyle}>
+                        <thead><tr>
+                          {['Session ID', 'Project', 'Model', 'Tools', 'MCP Servers', 'Enrolled'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+                        </tr></thead>
+                        <tbody>{a.sessions.map(s => (
+                          <tr key={s.session_id}>
+                            <td style={{ ...tdStyle, ...monoStyle, fontSize: 11 }}>{s.session_id.slice(0, 16)}…</td>
+                            <td style={tdStyle}>{s.project_name || '—'}</td>
+                            <td style={{ ...tdStyle, fontSize: 12 }}>{s.model || 'plan default'}</td>
+                            <td style={tdStyle}>{s.tool_count}</td>
+                            <td style={tdStyle}>{(s.mcp_servers_discovered || []).length > 0 ? (s.mcp_servers_discovered || []).join(', ') : '—'}</td>
+                            <td style={{ ...tdStyle, fontSize: 11, color: T.gray500 }}>{timeAgo(s.enrolled_at)}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -768,7 +852,7 @@ when { resource.file_zone == "secrets" };`}
 type TabKey = 'inventory' | 'discovery' | 'analytics' | 'admin';
 
 const NAV_ITEMS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'inventory', label: 'Agent Inventory', icon: '◉' },
+  { key: 'inventory', label: 'Claude Code Agents', icon: '◉' },
   { key: 'discovery', label: 'MCP Discovery',   icon: '⬡' },
   { key: 'analytics', label: 'Usage & Risk',    icon: '◈' },
   { key: 'admin',     label: 'Admin Config',    icon: '⚙' },
@@ -853,7 +937,7 @@ function App() {
           <div style={{ padding: 64, textAlign: 'center', color: T.gray400, fontSize: 14 }}>Loading...</div>
         ) : (
           <>
-            {tab === 'inventory' && <AgentInventory sessions={sessions} decisions={decisions} />}
+            {tab === 'inventory' && <ClaudeCodeAgents sessions={sessions} decisions={decisions} />}
             {tab === 'discovery' && <MCPDiscovery registry={registry} decisions={decisions} />}
             {tab === 'analytics' && <UsageAnalytics decisions={decisions} sessions={sessions} />}
             {tab === 'admin' && <AdminConfig />}

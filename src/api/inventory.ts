@@ -119,11 +119,17 @@ router.get('/decisions', (_req, res) => {
 router.get('/sessions', (_req, res) => {
   const sessions = Array.from(sessionStore.values()).map(s => ({
     active_mcp_servers: [...(activeMcpServers.get(s.session_id) || new Set())],
-    session_id:  s.session_id,
-    user_email:  s.user_email,
-    enrolled_at: s.enrolled_at,
-    tool_count:  s.tool_count,
-    locked:      s.locked,
+    session_id:     s.session_id,
+    user_email:     s.user_email,
+    enrolled_at:    s.enrolled_at,
+    tool_count:     s.tool_count,
+    locked:         s.locked,
+    agent_id:       s.agent_id     || '',
+    os_type:        s.os_type      || '',
+    hostname:       s.hostname     || '',
+    model:          s.model        || '',
+    project_name:   s.project_name || '',
+    mcp_servers_discovered: s.mcp_servers_discovered || [],
   }));
   res.json({ sessions, total: sessions.length });
 });
