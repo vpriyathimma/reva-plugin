@@ -191,6 +191,8 @@ export function buildCallToolPayload(params: {
       prior_intents:         params.priorIntents,
       query:                 params.query.slice(0, 500),
       query_history:         params.queryHistory.slice(0, 500),
+      prompt:                params.query.slice(0, 500),
+      prompt_history:        params.queryHistory.slice(0, 500),
       response:              '',
       trust_score:           params.scores.trust_score            ?? 70,
       injection_score:       params.scores.injection_score        ?? 0,
@@ -365,6 +367,8 @@ export function buildFileOperationPayload(params: {
   spawnCount?:      number;
   hitlAcknowledged: boolean;
   scores:           Record<string, any>;
+  prompt?:          string;
+  prompt_history?:  string[];
 }) {
   const fileZone   = resolveFileZone(params.filePath || params.command || '');
   const cedarAction = mapToolToAction(params.toolName);
@@ -425,6 +429,8 @@ export function buildFileOperationPayload(params: {
       escalation_score: params.scores.escalation_score  ?? 0,
       exfiltration_score: params.scores.exfiltration_score ?? 0,
       sod_violation:    params.scores.sod_violation     ?? false,
+      prompt:           (params.prompt || '').slice(0, 500),
+      prompt_history:   (params.prompt_history || []).slice(-3).join(' | ').slice(0, 500),
     },
     session_id: params.sessionId,
   };
@@ -474,6 +480,8 @@ export function buildMCPToolPayload(params: {
   sessionId:        string;
   hitlAcknowledged: boolean;
   scores:           Record<string, any>;
+  prompt?:          string;
+  prompt_history?:  string[];
 }) {
   const cedarAction = classifyMCPTool(params.toolName);
   const mcpToolId   = `${params.serverName}__${params.toolName}`;
@@ -507,6 +515,8 @@ export function buildMCPToolPayload(params: {
       injection_score:  params.scores.injection_score  ?? 0,
       escalation_score: params.scores.escalation_score ?? 0,
       exfiltration_score: params.scores.exfiltration_score ?? 0,
+      prompt:           (params.prompt || '').slice(0, 500),
+      prompt_history:   (params.prompt_history || []).slice(-3).join(' | ').slice(0, 500),
     },
     session_id: params.sessionId,
   };

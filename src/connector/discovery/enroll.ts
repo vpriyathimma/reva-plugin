@@ -13,7 +13,7 @@ export interface EnrolledSession {
 // In-memory session store
 export const sessionStore = new Map<string, EnrolledSession>();
 
-// Decision log
+// Decision log — enriched with full classification for dashboard
 export interface DecisionLog {
   timestamp:   string;
   session_id:  string;
@@ -23,6 +23,20 @@ export interface DecisionLog {
   sensitivity: string;
   effect:      'Permit' | 'Deny' | 'HITL';
   reason:      string;
+  // Classification context (optional — backward compatible)
+  intent?:           string;
+  trust_score?:      number;
+  scores?:           Record<string, any>;
+  prompt?:           string;
+  prompt_history?:   string[];
+  agent_type?:       string;
+  command_risk?:     string;
+  file_zone?:        string;
+  // Cedar result
+  cedar_decision?:    string;
+  cedar_policy_name?: string;
+  cedar_latency_ms?:  number;
+  cedar_decision_id?: string;
 }
 
 export const decisionLog: DecisionLog[] = [];

@@ -1,90 +1,71 @@
+// beforePrompt — pure classifier + context store
+// NO Cedar eval here. Prompt + prompt_history flow as context into PreToolUse.
+// Cedar makes all decisions at tool call time, not prompt time.
+
 import { Request, Response }          from 'express';
 import { classifyPrompt, recordBypassAttempt } from '../../api/intentClassifier';
 import { logDecision }                from '../discovery/enroll';
-import { resolveAgentName }           from '../../api/agentResolver';
-import { evaluateCedar, buildSubmitPromptPayload, buildClaudeCodePromptPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
+import { getOrCreateSessionTrace }    from '../../api/pdpEvaluate';
 
 import { subagentContextStore } from './beforeToolCall';
 
 export const sessionIntentStore = new Map<string, {
-  intent:       string;
-  trust_score:  number;
-  query:        string;
-  prior_intents: string;
-  timestamp:    string;
+  intent:         string;
+  trust_score:    number;
+  sensitivity:    string;
+  scores:         Record<string, any>;
+  prompt:         string;
+  prompt_history: string[];
+  prior_intents:  string;
+  timestamp:      string;
 }>();
 
-// Query history per session — last 3 prompts
+// Query history per session — last 10 prompts, PreToolUse reads last 3
 export const queryHistoryStore = new Map<string, string[]>();
 
 export async function handlePromptSubmit(req: Request, res: Response) {
   try {
-    const authHeader = req.headers.authorization || '';
-    const token      = authHeader.replace('Bearer ', '');
-    // Allow unauthenticated hook calls from Claude Code plugin
-    // User identity comes from req.body or default
-
     // Read OS user from X-OS-User header (set by hooks.json allowedEnvVars)
     const osUserFromHeader  = (req.headers['x-os-user'] as string) || '';
-    const projectFromHeader = (req.headers['x-project-dir'] as string) || '';
 
     const {
       session_id   = `session-${Date.now()}`,
       prompt       = '',
       user_email   = osUserFromHeader || (req as any).user?.email || 'claude-code-hook@reva.ai',
-      agent_cid    = '',
-      client_source = 'claude-code',
     } = req.body;
 
-    // Classify intent + compute guardrail scores
-    // Detect ! prefix bypass attempts — evaluate Cedar and log as policy violation
+    // Detect ! prefix bypass attempts — log only, do NOT fire Cedar
     const isBypassAttempt = prompt.trim().startsWith('!');
     if (isBypassAttempt) {
       console.warn(`[BYPASS] Developer used ! command bypass: session=${session_id} user=${user_email} prompt="${prompt.slice(0, 100)}"`);
       recordBypassAttempt(session_id);
-
-      // Evaluate Cedar for audit log
-      try {
-        const bypassPayload = buildClaudeCodePromptPayload({
-          osUser:        user_email,
-          projectName:   projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown',
-          sessionId:     session_id,
-          promptSnippet: prompt.slice(0, 200),
-          bypassAttempt: true,
-          scores:        { trust_score: 0 },
-        });
-        await evaluateCedar(bypassPayload);
-        console.log(`[BYPASS] Cedar evaluated bypass attempt for session=${session_id}`);
-      } catch (err: any) {
-        console.warn(`[BYPASS] Cedar evaluation failed: ${err.message}`);
-      }
     }
 
+    // Classify intent + compute guardrail scores
     const result = classifyPrompt(prompt, session_id, user_email);
 
     // Build query history
     const history = queryHistoryStore.get(session_id) || [];
-    const queryHistory = history.slice(-3).join(', ');
-    history.push(prompt.slice(0, 200));
+    history.push(prompt.slice(0, 500));
     queryHistoryStore.set(session_id, history.slice(-10));
 
-    // Build prior intents
+    // Build prior intents chain
     const prevIntent   = sessionIntentStore.get(session_id);
     const priorIntents = prevIntent
       ? `${prevIntent.prior_intents},${prevIntent.intent}`.replace(/^,/, '')
       : '';
 
-    // Store current intent for PreToolUse threading
+    // Store full context — PreToolUse reads this for every Cedar evaluation
     sessionIntentStore.set(session_id, {
-      intent:        result.intent,
-      trust_score:   result.trust_score,
-      query:         prompt.slice(0, 500),
-      prior_intents: priorIntents,
-      timestamp:     new Date().toISOString(),
+      intent:         result.intent,
+      trust_score:    result.trust_score,
+      sensitivity:    result.sensitivity,
+      scores:         result.scores,
+      prompt:         prompt.slice(0, 500),
+      prompt_history: history.slice(-3),
+      prior_intents:  priorIntents,
+      timestamp:      new Date().toISOString(),
     });
-
-    // Resolve agent name from Okta (cached after first call)
-    const agentName = agent_cid ? await resolveAgentName(agent_cid) : 'CoworkAICodingAgent';
 
     // Ensure session trace ID exists
     getOrCreateSessionTrace(session_id);
@@ -99,63 +80,38 @@ export async function handlePromptSubmit(req: Request, res: Response) {
       console.log(`[Subagent] Context reset for session=${session_id} on new prompt`);
     }
 
-    // ── Cedar PDP evaluation (Phase 7) ────────────────────────────
-    const cedarPayload = buildSubmitPromptPayload({
-      agentName,
-      agentId:      agent_cid,
-      humanSub:     user_email,
-      clientSource: client_source,
-      sessionId:    session_id,
-      scores:       { ...result.scores, trust_score: result.trust_score },
-      intent:       result.intent,
-      priorIntents,
-      query:        prompt,
-      queryHistory,
-    });
-
-    const cedarResult = await evaluateCedar(cedarPayload);
-
-    let effect: 'Permit' | 'Deny' | 'HITL' = 'Permit';
-    let reason  = 'Prompt permitted';
-
-    if (cedarResult.decision === 'deny') {
-      effect = 'Deny';
-      reason = cedarResult.policy_name
-        ? `Denied by policy: ${cedarResult.policy_name}`
-        : 'Denied by Cedar PDP';
-      recordBypassAttempt(session_id);
-    } else if (cedarResult.decision === 'conditional_allow') {
-      effect = 'HITL';
-      reason = cedarResult.policy_name
-        ? `HITL required by policy: ${cedarResult.policy_name}`
-        : 'HITL required by Cedar PDP';
-    }
-
+    // Log classification (not a Cedar decision — just context capture)
     logDecision({
-      timestamp:   new Date().toISOString(),
+      timestamp:      new Date().toISOString(),
       session_id,
       user_email,
-      tool:        'prompt',
-      server:      'cowork',
-      sensitivity: result.sensitivity,
-      effect,
-      reason,
+      tool:           'prompt',
+      server:         'claude-code',
+      sensitivity:    result.sensitivity,
+      effect:         'Permit',
+      reason:         'Prompt classified — enforcement deferred to PreToolUse',
+      intent:         result.intent,
+      trust_score:    result.trust_score,
+      scores:         result.scores,
+      prompt:         prompt.slice(0, 200),
+      agent_type:     'main',
+      command_risk:   '',
+      file_zone:      '',
     });
 
-    if (effect === 'Deny') {
-      return res.json({
-        hookSpecificOutput: {
-          hookEventName:            'UserPromptSubmit',
-          permissionDecision:       'deny',
-          permissionDecisionReason: reason,
-        },
-        reva: { effect, reason, trust_score: result.trust_score, intent: result.intent, scores: result.scores, cedar: cedarResult },
-      });
-    }
+    console.log(`[Prompt] session=${session_id} intent=${result.intent} trust=${result.trust_score} bypass=${isBypassAttempt}`);
 
+    // Always allow — Cedar evaluates at PreToolUse time with prompt context
     return res.json({
       hookSpecificOutput: { hookEventName: 'UserPromptSubmit', permissionDecision: 'allow' },
-      reva: { effect: 'Permit', reason, trust_score: result.trust_score, intent: result.intent, scores: result.scores, cedar: cedarResult },
+      reva: {
+        effect:      'Permit',
+        reason:      'Prompt classified — enforcement at tool call',
+        trust_score: result.trust_score,
+        intent:      result.intent,
+        sensitivity: result.sensitivity,
+        scores:      result.scores,
+      },
     });
 
   } catch (err: any) {

@@ -100,9 +100,10 @@ export async function handleToolCall(req: Request, res: Response) {
     const user_email = osUserFromHeader || osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
 
     const sessionIntent   = sessionIntentStore.get(session_id);
-    const promptIntent    = sessionIntent?.intent        || 'unknown';
-    const priorIntents    = sessionIntent?.prior_intents || '';
-    const query           = sessionIntent?.query         || '';
+    const promptIntent    = sessionIntent?.intent         || 'unknown';
+    const priorIntents    = sessionIntent?.prior_intents  || '';
+    const query           = sessionIntent?.prompt         || '';
+    const promptHistory   = sessionIntent?.prompt_history || [];
     const baseSensitivity = getToolSensitivity(server_name, server_url, tool_name);
 
     // Track MCP server usage dynamically
@@ -174,6 +175,8 @@ export async function handleToolCall(req: Request, res: Response) {
           sessionId:       session_id,
           hitlAcknowledged,
           scores:          { ...result.scores, trust_score: result.trust_score },
+          prompt:          query,
+          prompt_history:  promptHistory,
         })
       : client_source === 'claude-code'
       ? buildFileOperationPayload({
@@ -192,6 +195,8 @@ export async function handleToolCall(req: Request, res: Response) {
           spawnCount:      subagentContextStore.get(session_id)?.spawn_count || 1,
           hitlAcknowledged,
           scores:          { ...result.scores, trust_score: result.trust_score },
+          prompt:          query,
+          prompt_history:  promptHistory,
         })
       : buildCallToolPayload({
           agentName,
@@ -250,6 +255,18 @@ export async function handleToolCall(req: Request, res: Response) {
       sensitivity: result.sensitivity,
       effect,
       reason,
+      intent:            promptIntent,
+      trust_score:       result.trust_score,
+      scores:            result.scores,
+      prompt:            query.slice(0, 200),
+      prompt_history:    promptHistory,
+      agent_type:        derivedAgentType,
+      command_risk:      (cedarPayload as any)?.context?.command_risk || '',
+      file_zone:         (cedarPayload as any)?.context?.file_zone   || '',
+      cedar_decision:    cedarResult.decision,
+      cedar_policy_name: cedarResult.policy_name,
+      cedar_latency_ms:  cedarResult.latency_ms,
+      cedar_decision_id: cedarResult.decision_id,
     });
 
     // HITL: trigger Okta Verify push — SYNCHRONOUS — hold response until approved/denied
@@ -280,12 +297,12 @@ export async function handleToolCall(req: Request, res: Response) {
 
           // Rebuild payload with hitlAcknowledged: true and re-evaluate
           const approvedPayload = (client_source === 'claude-code' && isMCPTool)
-            ? buildMCPToolPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown', toolName: mcpTool, serverName: mcpServer, agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score } })
-            : buildFileOperationPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : 'claude-demo-project', toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score } });
+            ? buildMCPToolPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown', toolName: mcpTool, serverName: mcpServer, agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory })
+            : buildFileOperationPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : 'claude-demo-project', toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory });
 
           const approvedCedar = await evaluateCedar(approvedPayload);
 
-          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Permit', reason: 'HITL approved — Cedar re-evaluated and permitted' });
+          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Permit', reason: 'HITL approved — Cedar re-evaluated and permitted', intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: approvedCedar.decision, cedar_policy_name: approvedCedar.policy_name, cedar_latency_ms: approvedCedar.latency_ms });
 
           hitlInFlight.delete(hitlKey);
           return res.json({
@@ -299,7 +316,7 @@ export async function handleToolCall(req: Request, res: Response) {
           recordHITLDenial(session_id, tool_name, user_email, denyStatus, triggerResult.poll_url);
           hitlInFlight.delete(hitlKey);
 
-          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Deny', reason: `HITL ${denyStatus} by ${resolveHITLEmail(user_email)}` });
+          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Deny', reason: `HITL ${denyStatus} by ${resolveHITLEmail(user_email)}`, intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: cedarResult.decision, cedar_policy_name: cedarResult.policy_name, cedar_latency_ms: cedarResult.latency_ms });
 
           return res.json({
             hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',

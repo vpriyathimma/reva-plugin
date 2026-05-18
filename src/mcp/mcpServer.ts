@@ -181,7 +181,9 @@ async function handleMcpRequest(req: Request, res: Response) {
 
       sessionIntentStore.set(sessionId, {
         intent: result.intent, trust_score: result.trust_score,
-        query: prompt.slice(0, 500), prior_intents: priorIntents,
+        sensitivity: result.sensitivity, scores: result.scores,
+        prompt: prompt.slice(0, 500), prompt_history: history.slice(-3),
+        prior_intents: priorIntents,
         timestamp: new Date().toISOString(),
       });
       history.push(prompt.slice(0, 200));
@@ -227,7 +229,7 @@ async function handleMcpRequest(req: Request, res: Response) {
         scores: { ...result.scores, trust_score: result.trust_score },
         hitlAcknowledged, intent: result.intent,
         priorIntents: sessionIntent?.prior_intents || '',
-        query: sessionIntent?.query || '', queryHistory: '',
+        query: sessionIntent?.prompt || '', queryHistory: '',
       }));
 
       let effect: 'Permit' | 'Deny' | 'HITL' = cedarResult.decision === 'allow' ? 'Permit' : cedarResult.decision === 'conditional_allow' ? 'HITL' : 'Deny';
