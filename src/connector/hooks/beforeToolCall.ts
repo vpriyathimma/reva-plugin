@@ -4,7 +4,7 @@ import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
 import { claudeSessionUserStore } from './onSessionStart';
-import { getToolSensitivity }    from '../../api/knownServers';
+import { recordDynamicTool, discoveredServers } from '../../api/mcpProbe';
 import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
 import { recordHITLApproval, recordHITLDenial } from '../hitl/callback';
@@ -104,7 +104,18 @@ export async function handleToolCall(req: Request, res: Response) {
     const priorIntents    = sessionIntent?.prior_intents  || '';
     const query           = sessionIntent?.prompt         || '';
     const promptHistory   = sessionIntent?.prompt_history || [];
-    const baseSensitivity = getToolSensitivity(server_name, server_url, tool_name);
+    const baseSensitivity = (() => {
+      // Check MCP probe results for auto-classified sensitivity
+      const probed = discoveredServers.get(server_name) || discoveredServers.get(`claude.ai ${server_name}`);
+      const probedTool = probed?.tools?.find(t => t.name === tool_name || tool_name.includes(t.name));
+      return probedTool?.sensitivity || 'medium';
+    })();
+
+    // Record dynamic tool for inventory (especially for auth-required servers)
+    if (tool_name.startsWith('mcp__')) {
+      const parts = tool_name.split('__');
+      recordDynamicTool(parts[1] || server_name, parts[2] || tool_name);
+    }
 
     // Track MCP server usage dynamically
     trackMcpServer(session_id, tool_name);

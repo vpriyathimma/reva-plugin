@@ -4,7 +4,7 @@ import { sessionStore, logDecision, enrollSession } from '../connector/discovery
 import { resolveAgentName } from '../api/agentResolver';
 import { evaluateCedar, buildCallToolPayload, buildSubmitPromptPayload, getOrCreateSessionTrace } from '../api/pdpEvaluate';
 import { classifyToolCall, classifyPrompt } from '../api/intentClassifier';
-import { getToolSensitivity, knownServers } from '../api/knownServers';
+import { discoveredServers } from '../api/mcpProbe';
 import { sessionIntentStore, queryHistoryStore } from '../connector/hooks/beforePrompt';
 import { hitlStore } from '../connector/hooks/beforeToolCall';
 import { triggerHITL } from '../connector/hitl/trigger';
@@ -13,25 +13,23 @@ import { recordHITLApproval, recordHITLDenial } from '../connector/hitl/callback
 
 const router = Router();
 
-// Auto-enroll session from knownServers registry when Cowork connects via MCP
+// Auto-enroll session from discovered MCP servers when Cowork connects via MCP
 function autoEnrollSession(sessionId: string, userEmail: string): void {
   if (sessionStore.has(sessionId)) return;
   const tools: any[] = [];
-  for (const [, entry] of Object.entries(knownServers)) {
-    const serverUrl  = entry.url_patterns[0] ? `https://${entry.url_patterns[0]}/mcp` : '';
-    const serverType = entry.url_patterns.length === 0 ? 'stdio' : 'streamable-http';
-    for (const [toolName, toolEntry] of Object.entries(entry.tools)) {
+  discoveredServers.forEach((probe) => {
+    for (const tool of probe.tools) {
       tools.push({
-        server_name:        entry.display_name,
-        server_url:         serverUrl,
-        server_type:        serverType,
-        tool_name:          toolName,
-        description:        '',
-        sensitivity:        toolEntry.sensitivity,
-        sensitivity_reason: `${toolEntry.source} · intent: ${toolEntry.intent.join(', ')}`,
+        server_name:        probe.server_name,
+        server_url:         probe.server_url,
+        server_type:        'streamable-http',
+        tool_name:          tool.name,
+        description:        tool.description,
+        sensitivity:        tool.sensitivity,
+        sensitivity_reason: `MCP probe · ${tool.readOnly ? 'read-only' : tool.destructive ? 'destructive' : 'write'}`,
       });
     }
-  }
+  });
   enrollSession(sessionId, userEmail, tools);
   console.log(`[MCP] Auto-enrolled ${sessionId} for ${userEmail} — ${tools.length} tools`);
 }
@@ -215,7 +213,11 @@ async function handleMcpRequest(req: Request, res: Response) {
       const agentCid    = toolInput.agent_cid || '';
       const agentName   = agentCid ? await resolveAgentName(agentCid) : 'CoworkAICodingAgent';
       const sessionIntent = sessionIntentStore.get(sessionId);
-      const baseSensitivity = getToolSensitivity(serverName, serverUrl, mcpToolName);
+      const baseSensitivity = (() => {
+        const probed = discoveredServers.get(serverName) || discoveredServers.get(`claude.ai ${serverName}`);
+        const probedTool = probed?.tools?.find(t => t.name === mcpToolName);
+        return probedTool?.sensitivity || 'medium';
+      })();
       const result = classifyToolCall(mcpToolName, serverName, baseSensitivity, sessionId, sessionIntent?.intent || 'unknown');
       const hitlKey = `${sessionId}:${mcpToolName}`;
       const hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;

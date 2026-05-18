@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { activeMcpServers } from '../connector/hooks/beforeToolCall';
 import { sessionStore, decisionLog } from '../connector/discovery/enroll';
 import { knownServers, resolveServer } from './knownServers';
+import { discoveredServers, dynamicTools, getServerTools } from './mcpProbe';
 
 const router = Router();
 
@@ -137,6 +138,45 @@ router.get('/sessions', (_req, res) => {
 // GET /api/audit
 router.get('/audit', (_req, res) => {
   res.json({ decisions: decisionLog, total: decisionLog.length });
+});
+
+// GET /api/mcp-discovery — live MCP probe results + dynamic tool capture
+router.get('/mcp-discovery', (_req, res) => {
+  const servers: any[] = [];
+
+  // Probed servers (from tools/list)
+  discoveredServers.forEach((probe, name) => {
+    const dynamic = dynamicTools.get(name);
+    const dynamicList = dynamic ? Array.from(dynamic.values()) : [];
+    servers.push({
+      server_name:  probe.server_name,
+      server_url:   probe.server_url,
+      status:       probe.status,
+      probed_at:    probe.probed_at,
+      latency_ms:   probe.latency_ms,
+      tools_probed: probe.tools,
+      tools_dynamic: dynamicList,
+      tool_count:   probe.tools.length || dynamicList.length,
+    });
+  });
+
+  // Dynamic-only servers (captured via PreToolUse but never probed)
+  dynamicTools.forEach((tools, name) => {
+    if (!discoveredServers.has(name)) {
+      servers.push({
+        server_name:   name,
+        server_url:    '',
+        status:        'dynamic_only',
+        probed_at:     '',
+        latency_ms:    0,
+        tools_probed:  [],
+        tools_dynamic: Array.from(tools.values()),
+        tool_count:    tools.size,
+      });
+    }
+  });
+
+  res.json({ servers, total: servers.length });
 });
 
 export default router;

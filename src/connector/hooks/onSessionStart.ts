@@ -9,6 +9,7 @@ import { Sensitivity }       from '../discovery/classifier';
 import { resolveSession }    from '../../api/sessionResolver';
 import { enrollSession }     from '../discovery/enroll';
 import { getOrCreateSessionTrace } from '../../api/pdpEvaluate';
+import { probeAllServers }   from '../../api/mcpProbe';
 
 // OS user store — maps Claude Code session_id to OS user
 export const claudeSessionUserStore = new Map<string, string>();
@@ -23,6 +24,15 @@ function generateAgentId(osUser: string, hostname: string): string {
   const id = `agent-${hash}`;
   agentIdStore.set(`${osUser}:${hostname}`, id);
   return id;
+}
+
+// Map kernel name to display OS name
+function mapOsType(raw: string): string {
+  const lower = (raw || '').toLowerCase();
+  if (lower === 'darwin') return 'macOS';
+  if (lower === 'linux')  return 'Linux';
+  if (lower.startsWith('mingw') || lower.startsWith('msys') || lower.startsWith('cygwin') || lower.includes('windows')) return 'Windows';
+  return raw || '';
 }
 
 // Parse MCP servers from mcp_config JSON (sent by curl from local .mcp.json)
@@ -62,7 +72,7 @@ export async function handleSessionStart(req: Request, res: Response) {
     const project_name  = cwd.split('/').pop() || '';
 
     // Enriched fields from curl command
-    const os_type  = body.os_type  || '';
+    const os_type  = mapOsType(body.os_type || '');
     const hostname = body.hostname || '';
     const model    = body.model    || '';
 
@@ -74,6 +84,11 @@ export async function handleSessionStart(req: Request, res: Response) {
 
     // Generate synthetic agent ID (deterministic per user+machine)
     const agent_id = generateAgentId(os_user, hostname || 'localhost');
+
+    // Trigger MCP tool discovery probe — async, non-blocking
+    if (mcp_servers.length > 0) {
+      probeAllServers(mcp_servers);
+    }
 
     console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} agent=${agent_id} mcp=[${mcp_servers.join(',')}]`);
 
