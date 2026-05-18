@@ -1,339 +1,796 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 
+// ── API ──────────────────────────────────────────────────────────
 const API = '';
 
-const COLORS: Record<string, string> = {
-  critical: '#E24B4A', high: '#EF9F27', medium: '#378ADD', low: '#1D9E75', unknown: '#888888',
-};
-const BADGES: Record<string, string> = {
-  critical: '#FCEBEB', high: '#FAEEDA', medium: '#E6F1FB', low: '#E1F5EE', unknown: '#F1EFE8',
-};
-const INTENTS       = ['read','write','modify','destructive','communicate','govern','exfiltrate'];
-const SENSITIVITIES = ['low','medium','high','critical'];
+async function fetchJSON(path: string) {
+  const r = await fetch(`${API}${path}`);
+  return r.json();
+}
 
-function Badge({ level }: { level: string }) {
+// ── Types ────────────────────────────────────────────────────────
+interface Decision {
+  timestamp: string; session_id: string; user_email: string;
+  tool: string; server: string; sensitivity: string;
+  effect: 'Permit' | 'Deny' | 'HITL'; reason: string;
+  intent?: string; trust_score?: number; scores?: Record<string, any>;
+  prompt?: string; prompt_history?: string[];
+  agent_type?: string; command_risk?: string; file_zone?: string;
+  cedar_decision?: string; cedar_policy_name?: string;
+  cedar_latency_ms?: number; cedar_decision_id?: string;
+}
+
+interface Session {
+  session_id: string; user_email: string; enrolled_at: string;
+  tool_count: number; locked: boolean; active_mcp_servers?: string[];
+}
+
+interface ServerEntry {
+  server_name: string; server_url: string; server_type: string;
+  enrolled_at: string; user: string; tools: any[]; risk_summary: Record<string, number>;
+  has_registry: boolean;
+}
+
+// ── Design Tokens ────────────────────────────────────────────────
+const T = {
+  accent:     '#5B4DC7',
+  accentLight:'#EEEDFE',
+  accentMid:  '#D4D1F7',
+  green:      '#0D9668',
+  greenBg:    '#ECFDF5',
+  red:        '#DC2626',
+  redBg:      '#FEF2F2',
+  amber:      '#D97706',
+  amberBg:    '#FFFBEB',
+  blue:       '#2563EB',
+  blueBg:     '#EFF6FF',
+  gray50:     '#FAFAFA',
+  gray100:    '#F4F4F5',
+  gray200:    '#E4E4E7',
+  gray300:    '#D4D4D8',
+  gray400:    '#A1A1AA',
+  gray500:    '#71717A',
+  gray600:    '#52525B',
+  gray700:    '#3F3F46',
+  gray900:    '#18181B',
+  mono:       "'JetBrains Mono', monospace",
+  radius:     '8px',
+  radiusLg:   '12px',
+};
+
+const SENSITIVITY_COLORS: Record<string, { fg: string; bg: string }> = {
+  critical: { fg: T.red,   bg: T.redBg   },
+  high:     { fg: T.amber, bg: T.amberBg },
+  medium:   { fg: T.blue,  bg: T.blueBg  },
+  low:      { fg: T.green, bg: T.greenBg },
+};
+
+const EFFECT_COLORS: Record<string, { fg: string; bg: string }> = {
+  Permit: { fg: T.green, bg: T.greenBg },
+  Deny:   { fg: T.red,   bg: T.redBg   },
+  HITL:   { fg: T.amber, bg: T.amberBg },
+};
+
+// ── Shared Components ────────────────────────────────────────────
+function Badge({ text, fg, bg }: { text: string; fg: string; bg: string }) {
   return (
-    <span style={{ background: BADGES[level]||'#F1EFE8', color: COLORS[level]||'#444', padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-      {level}
-    </span>
+    <span style={{
+      display: 'inline-block', padding: '2px 10px', borderRadius: '20px',
+      fontSize: 11, fontWeight: 600, letterSpacing: '0.3px',
+      textTransform: 'uppercase', color: fg, background: bg,
+      whiteSpace: 'nowrap',
+    }}>{text}</span>
   );
 }
 
-function SourceBadge({ source }: { source: string }) {
-  const c: Record<string,{bg:string;color:string}> = {
-    known:    { bg: '#E1F5EE', color: '#0F6E56' },
-    metadata: { bg: '#E6F1FB', color: '#2563EB' },
-    admin:    { bg: '#EDE9FE', color: '#534AB7' },
-    auto:     { bg: '#F1EFE8', color: '#888'    },
-  };
-  const s = c[source] || c.auto;
-  return <span style={{ background: s.bg, color: s.color, padding: '2px 8px', borderRadius: 8, fontSize: 11, fontWeight: 600 }}>{source}</span>;
+function SensitivityBadge({ level }: { level: string }) {
+  const c = SENSITIVITY_COLORS[level] || { fg: T.gray500, bg: T.gray100 };
+  return <Badge text={level} fg={c.fg} bg={c.bg} />;
 }
 
-function RiskBar({ summary }: { summary: any }) {
-  const total = Object.values(summary).reduce((a:any,b:any)=>a+b,0) as number;
-  if (!total) return null;
+function EffectBadge({ effect }: { effect: string }) {
+  const c = EFFECT_COLORS[effect] || { fg: T.gray500, bg: T.gray100 };
+  return <Badge text={effect} fg={c.fg} bg={c.bg} />;
+}
+
+function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
   return (
-    <div style={{ display:'flex', height:6, borderRadius:4, overflow:'hidden', gap:1, margin:'8px 0' }}>
-      {['critical','high','medium','low'].map(l => summary[l] ? <div key={l} style={{ flex:summary[l], background:COLORS[l] }} /> : null)}
+    <div style={{
+      background: '#fff', border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg,
+      padding: '20px 24px', minWidth: 0,
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 500, color: T.gray400, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, color: color || T.gray900, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: T.gray400, marginTop: 6 }}>{sub}</div>}
     </div>
   );
 }
 
-function EditToolRow({ tool, serverUrl, onSave, onCancel }: any) {
-  const [intent,      setIntent]      = useState(tool.intent?.[0]||'read');
-  const [sensitivity, setSensitivity] = useState(tool.sensitivity||'medium');
-  const [reason,      setReason]      = useState('');
-
-  const save = async () => {
-    await fetch(`${API}/api/pdp/intents`, {
-      method:  'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ server_url: serverUrl, tool_name: tool.tool_name, intent: [intent], sensitivity, reason: reason||'Admin override' }),
-    });
-    onSave({ ...tool, intent:[intent], sensitivity, source:'admin', version:(tool.version||1)+1 });
-  };
-
+function SectionHeader({ title, sub }: { title: string; sub?: string }) {
   return (
-    <tr style={{ background:'#FAFAFE', borderBottom:'1px solid #E8E7E0' }}>
-      <td style={{ padding:'10px 12px', fontFamily:'monospace', fontSize:12, color:'#3C3489' }}>{tool.tool_name}</td>
-      <td style={{ padding:'10px 12px' }}>
-        <select value={intent} onChange={e=>setIntent(e.target.value)} style={{ fontSize:12, padding:'4px 8px', borderRadius:6, border:'1px solid #E8E7E0' }}>
-          {INTENTS.map(i=><option key={i} value={i}>{i}</option>)}
-        </select>
-      </td>
-      <td style={{ padding:'10px 12px' }}>
-        <select value={sensitivity} onChange={e=>setSensitivity(e.target.value)} style={{ fontSize:12, padding:'4px 8px', borderRadius:6, border:'1px solid #E8E7E0' }}>
-          {SENSITIVITIES.map(s=><option key={s} value={s}>{s}</option>)}
-        </select>
-      </td>
-      <td style={{ padding:'10px 12px' }}>
-        <input placeholder="Reason (optional)" value={reason} onChange={e=>setReason(e.target.value)} style={{ fontSize:12, padding:'4px 8px', borderRadius:6, border:'1px solid #E8E7E0', width:160 }} />
-      </td>
-      <td style={{ padding:'10px 12px' }}>—</td>
-      <td style={{ padding:'10px 12px' }}>
-        <button onClick={save} style={{ fontSize:11, padding:'4px 10px', borderRadius:6, background:'#534AB7', color:'#fff', border:'none', cursor:'pointer', marginRight:6 }}>Save</button>
-        <button onClick={onCancel} style={{ fontSize:11, padding:'4px 10px', borderRadius:6, background:'#F1EFE8', color:'#444', border:'none', cursor:'pointer' }}>Cancel</button>
-      </td>
-    </tr>
+    <div style={{ marginBottom: 24 }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, color: T.gray900 }}>{title}</h2>
+      {sub && <p style={{ fontSize: 13, color: T.gray500, marginTop: 4 }}>{sub}</p>}
+    </div>
   );
 }
 
-function AddToolRow({ serverUrl, onSave, onCancel }: any) {
-  const [toolName,    setToolName]    = useState('');
-  const [intent,      setIntent]      = useState('read');
-  const [sensitivity, setSensitivity] = useState('medium');
-  const [reason,      setReason]      = useState('');
-
-  const save = async () => {
-    if (!toolName.trim()) return;
-    await fetch(`${API}/api/pdp/intents`, {
-      method:  'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ server_url: serverUrl, tool_name: toolName.trim(), intent: [intent], sensitivity, reason: reason||'Admin added' }),
-    });
-    onSave({ tool_name:toolName.trim(), intent:[intent], sensitivity, source:'admin', version:1 });
-  };
-
+function EmptyState({ message }: { message: string }) {
   return (
-    <tr style={{ background:'#F5F3FF', borderBottom:'1px solid #E8E7E0' }}>
-      <td style={{ padding:'10px 12px' }}>
-        <input placeholder="exact tool name" value={toolName} onChange={e=>setToolName(e.target.value)}
-          style={{ fontSize:12, padding:'4px 8px', borderRadius:6, border:'1px solid #534AB7', fontFamily:'monospace', width:180 }} />
-      </td>
-      <td style={{ padding:'10px 12px' }}>
-        <select value={intent} onChange={e=>setIntent(e.target.value)} style={{ fontSize:12, padding:'4px 8px', borderRadius:6, border:'1px solid #E8E7E0' }}>
-          {INTENTS.map(i=><option key={i} value={i}>{i}</option>)}
-        </select>
-      </td>
-      <td style={{ padding:'10px 12px' }}>
-        <select value={sensitivity} onChange={e=>setSensitivity(e.target.value)} style={{ fontSize:12, padding:'4px 8px', borderRadius:6, border:'1px solid #E8E7E0' }}>
-          {SENSITIVITIES.map(s=><option key={s} value={s}>{s}</option>)}
-        </select>
-      </td>
-      <td style={{ padding:'10px 12px' }}>
-        <input placeholder="Reason" value={reason} onChange={e=>setReason(e.target.value)} style={{ fontSize:12, padding:'4px 8px', borderRadius:6, border:'1px solid #E8E7E0', width:160 }} />
-      </td>
-      <td style={{ padding:'10px 12px' }}>—</td>
-      <td style={{ padding:'10px 12px' }}>
-        <button onClick={save} style={{ fontSize:11, padding:'4px 10px', borderRadius:6, background:'#0F6E56', color:'#fff', border:'none', cursor:'pointer', marginRight:6 }}>Add</button>
-        <button onClick={onCancel} style={{ fontSize:11, padding:'4px 10px', borderRadius:6, background:'#F1EFE8', color:'#444', border:'none', cursor:'pointer' }}>Cancel</button>
-      </td>
-    </tr>
+    <div style={{
+      padding: '48px 24px', textAlign: 'center', color: T.gray400,
+      fontSize: 14, border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg,
+    }}>{message}</div>
   );
 }
 
-function ToolRegistry({ serverUrl, serverName }: { serverUrl: string; serverName: string }) {
-  const [tools,       setTools]       = useState<any[]>([]);
-  const [version,     setVersion]     = useState(1);
-  const [history,     setHistory]     = useState<any[]>([]);
-  const [editingIdx,  setEditingIdx]  = useState<number|null>(null);
-  const [addingNew,   setAddingNew]   = useState(false);
-  const [loading,     setLoading]     = useState(true);
-  const [showHistory, setShowHistory] = useState(false);
+const tableStyle: React.CSSProperties = {
+  width: '100%', borderCollapse: 'collapse', fontSize: 13,
+};
+const thStyle: React.CSSProperties = {
+  textAlign: 'left', padding: '10px 14px', color: T.gray400,
+  fontWeight: 500, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.4px',
+  borderBottom: `1px solid ${T.gray200}`, background: T.gray50,
+};
+const tdStyle: React.CSSProperties = {
+  padding: '10px 14px', borderBottom: `1px solid ${T.gray100}`,
+  verticalAlign: 'top',
+};
+const monoStyle: React.CSSProperties = {
+  fontFamily: T.mono, fontSize: 12, color: T.accent,
+};
 
-  useEffect(() => {
-    fetch(`${API}/api/registry/tools`)
-      .then(r => r.json())
-      .then(data => {
-        // Match by URL pattern first, then server name
-        const match = data.servers?.find((s: any) => {
-          if (serverUrl && s.url_patterns?.some((p: string) => serverUrl.includes(p))) return true;
-          if (s.key === serverName.toLowerCase()) return true;
-          if (serverName.toLowerCase().includes(s.key)) return true;
-          return false;
-        });
-        if (match) {
-          setTools(match.tools || []);
-          setVersion(match.version || 1);
-          setHistory(match.history || []);
-        }
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, [serverUrl, serverName]);
+function timeAgo(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
 
-  const handleSave = (updated: any, idx: number) => {
-    const next = [...tools]; next[idx] = updated;
-    setTools(next);
-    setVersion(v => v+1);
-    setHistory(h => [...h, { v: version+1, by: 'admin', at: new Date().toISOString(), reason: 'Updated via UI' }]);
-    setEditingIdx(null);
-  };
+// ── Section A: Agent Inventory ───────────────────────────────────
+function AgentInventory({ sessions, decisions }: { sessions: Session[]; decisions: Decision[] }) {
+  const agents = useMemo(() => {
+    const map = new Map<string, { user: string; sessions: Session[]; lastSeen: string; totalDecisions: number; denyCount: number; mcpServers: Set<string> }>();
+    sessions.forEach(s => {
+      const key = s.user_email;
+      if (!map.has(key)) map.set(key, { user: key, sessions: [], lastSeen: s.enrolled_at, totalDecisions: 0, denyCount: 0, mcpServers: new Set() });
+      const entry = map.get(key)!;
+      entry.sessions.push(s);
+      if (new Date(s.enrolled_at) > new Date(entry.lastSeen)) entry.lastSeen = s.enrolled_at;
+      (s.active_mcp_servers || []).forEach(m => entry.mcpServers.add(m));
+    });
+    decisions.forEach(d => {
+      const entry = map.get(d.user_email);
+      if (entry) {
+        entry.totalDecisions++;
+        if (d.effect === 'Deny') entry.denyCount++;
+      }
+    });
+    return Array.from(map.values());
+  }, [sessions, decisions]);
 
-  const handleAdd = (t: any) => { setTools(prev => [...prev, t]); setVersion(v => v+1); setAddingNew(false); };
-
-  if (loading) return <div style={{ padding:16, color:'#888', fontSize:13 }}>Loading tool registry...</div>;
+  const onlineThreshold = 30 * 60 * 1000; // 30 min
+  const onlineCount = agents.filter(a => Date.now() - new Date(a.lastSeen).getTime() < onlineThreshold).length;
 
   return (
-    <div style={{ borderTop:'1px solid #EEEDFE', padding:'12px 0 0 0' }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 4px 10px 4px' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <span style={{ fontSize:13, fontWeight:600, color:'#534AB7' }}>Tool Registry</span>
-          <span style={{ fontSize:11, color:'#888', background:'#F1EFE8', padding:'2px 8px', borderRadius:8 }}>v{version}</span>
-          {history.length > 0 && (
-            <button onClick={() => setShowHistory(!showHistory)} style={{ fontSize:11, color:'#534AB7', background:'none', border:'none', cursor:'pointer', textDecoration:'underline' }}>
-              {showHistory ? 'Hide history' : `History (${history.length})`}
-            </button>
-          )}
-        </div>
-        <button onClick={() => { setAddingNew(true); setEditingIdx(null); }}
-          style={{ fontSize:11, padding:'4px 12px', borderRadius:6, background:'#534AB7', color:'#fff', border:'none', cursor:'pointer' }}>
-          + Add Tool
-        </button>
+    <div>
+      <SectionHeader title="Agent Inventory" sub="All discovered Claude Code instances tied to developers" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 28 }}>
+        <StatCard label="Total Developers" value={agents.length} color={T.accent} />
+        <StatCard label="Online Now" value={onlineCount} sub="Last 30 minutes" color={T.green} />
+        <StatCard label="Total Sessions" value={sessions.length} />
+        <StatCard label="Governed" value={agents.filter(a => a.totalDecisions > 0).length} sub={`${agents.filter(a => a.totalDecisions === 0).length} ungoverned`} color={T.green} />
       </div>
 
-      {showHistory && history.length > 0 && (
-        <div style={{ background:'#F9F8F5', borderRadius:8, padding:10, marginBottom:10, fontSize:11, color:'#5F5E5A' }}>
-          {[...history].reverse().map((h, i) => (
-            <div key={i} style={{ padding:'3px 0', borderBottom: i < history.length-1 ? '1px solid #E8E7E0' : 'none' }}>
-              <span style={{ color:'#534AB7', fontWeight:600 }}>v{h.v}</span>{' '}{h.reason}{' · '}{h.by}{' · '}{new Date(h.at).toLocaleString()}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {tools.length === 0 && !addingNew && (
-        <div style={{ padding:'16px 4px', color:'#888', fontSize:13 }}>
-          Tools unidentified — add them manually using Tool Registry.
-        </div>
-      )}
-
-      {(tools.length > 0 || addingNew) && (
-        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
-          <thead>
-            <tr style={{ background:'#F9F8F5', borderBottom:'1px solid #E8E7E0' }}>
-              {['Tool Name','Intent','Sensitivity','Reason','Source / Ver','Actions'].map(h => (
-                <th key={h} style={{ textAlign:'left', padding:'8px 12px', color:'#888', fontWeight:500, fontSize:11 }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {addingNew && <AddToolRow serverUrl={serverUrl} onSave={handleAdd} onCancel={() => setAddingNew(false)} />}
-            {tools.map((tool, idx) =>
-              editingIdx === idx ? (
-                <EditToolRow key={idx} tool={tool} serverUrl={serverUrl}
-                  onSave={(u:any) => handleSave(u, idx)} onCancel={() => setEditingIdx(null)} />
-              ) : (
-                <tr key={idx} style={{ borderBottom:'1px solid #F1EFE8' }}>
-                  <td style={{ padding:'8px 12px', fontFamily:'monospace', color:'#3C3489', fontSize:12 }}>{tool.tool_name}</td>
-                  <td style={{ padding:'8px 12px', color:'#534AB7', fontWeight:500, fontSize:12 }}>
-                    {Array.isArray(tool.intent) ? tool.intent.join(', ') : tool.intent}
+      {agents.length === 0 ? <EmptyState message="No agents discovered yet. Start a Claude Code session to populate." /> : (
+        <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
+          <table style={tableStyle}>
+            <thead><tr>
+              {['Developer', 'Status', 'Sessions', 'Last Seen', 'MCP Servers', 'Decisions', 'Deny Rate'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+            </tr></thead>
+            <tbody>{agents.map(a => {
+              const isOnline = Date.now() - new Date(a.lastSeen).getTime() < onlineThreshold;
+              const denyRate = a.totalDecisions > 0 ? Math.round((a.denyCount / a.totalDecisions) * 100) : 0;
+              return (
+                <tr key={a.user}>
+                  <td style={tdStyle}><span style={{ fontWeight: 600 }}>{a.user}</span></td>
+                  <td style={tdStyle}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: isOnline ? T.green : T.gray300 }} />
+                      <span style={{ fontSize: 12, color: isOnline ? T.green : T.gray400 }}>{isOnline ? 'Online' : 'Offline'}</span>
+                    </span>
                   </td>
-                  <td style={{ padding:'8px 12px' }}><Badge level={tool.sensitivity} /></td>
-                  <td style={{ padding:'8px 12px', color:'#888', fontSize:11 }}>—</td>
-                  <td style={{ padding:'8px 12px' }}>
-                    <SourceBadge source={tool.source} />
-                    <span style={{ marginLeft:6, fontSize:11, color:'#888' }}>v{tool.version}</span>
-                  </td>
-                  <td style={{ padding:'8px 12px' }}>
-                    <button onClick={() => { setEditingIdx(idx); setAddingNew(false); }}
-                      style={{ fontSize:11, padding:'3px 10px', borderRadius:6, background:'#F1EFE8', color:'#534AB7', border:'1px solid #E8E7E0', cursor:'pointer' }}>
-                      Edit
-                    </button>
+                  <td style={tdStyle}>{a.sessions.length}</td>
+                  <td style={{ ...tdStyle, color: T.gray500, fontSize: 12 }}>{timeAgo(a.lastSeen)}</td>
+                  <td style={tdStyle}>{a.mcpServers.size > 0 ? Array.from(a.mcpServers).map(s => <span key={s} style={{ ...monoStyle, display: 'inline-block', background: T.gray100, padding: '1px 8px', borderRadius: 4, marginRight: 4, fontSize: 11 }}>{s}</span>) : <span style={{ color: T.gray400, fontSize: 12 }}>—</span>}</td>
+                  <td style={tdStyle}>{a.totalDecisions}</td>
+                  <td style={tdStyle}>
+                    <span style={{ fontWeight: 600, color: denyRate > 20 ? T.red : denyRate > 5 ? T.amber : T.green }}>{denyRate}%</span>
                   </td>
                 </tr>
-              )
-            )}
-          </tbody>
-        </table>
+              );
+            })}</tbody>
+          </table>
+        </div>
       )}
     </div>
   );
 }
 
-function ServerCard({ server, expanded, onToggle }: any) {
-  const [activeTab, setActiveTab] = useState<'tools'|'registry'>('tools');
+// ── Section B: MCP Discovery ─────────────────────────────────────
+function MCPDiscovery({ registry, decisions }: { registry: ServerEntry[]; decisions: Decision[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
 
-  const tabStyle = (active: boolean) => ({
-    padding:'6px 14px', borderRadius:6, cursor:'pointer',
-    fontWeight: active ? 600 : 400,
-    background: active ? '#EEEDFE' : 'transparent',
-    color:      active ? '#534AB7' : '#888',
-    border:'none', fontSize:12,
-  });
+  const serverStats = useMemo(() => {
+    const stats = new Map<string, { calls: number; reads: number; writes: number; denies: number }>();
+    decisions.forEach(d => {
+      if (d.tool === 'prompt') return;
+      const server = d.server || 'claude-code';
+      if (!stats.has(server)) stats.set(server, { calls: 0, reads: 0, writes: 0, denies: 0 });
+      const s = stats.get(server)!;
+      s.calls++;
+      if (d.effect === 'Deny') s.denies++;
+      if (d.intent === 'read') s.reads++;
+      else s.writes++;
+    });
+    return stats;
+  }, [decisions]);
+
+  const totalTools = registry.reduce((a, s) => a + s.tools.length, 0);
+  const criticalTools = registry.reduce((a, s) => a + (s.risk_summary.critical || 0), 0);
+  const highTools = registry.reduce((a, s) => a + (s.risk_summary.high || 0), 0);
+  const ungovernedCount = registry.filter(s => {
+    const stats = serverStats.get(s.server_name);
+    return !stats || stats.calls === 0;
+  }).length;
 
   return (
-    <div style={{ background:'#fff', border:'1px solid #E8E7E0', borderRadius:12, marginBottom:16, overflow:'hidden' }}>
-      <div onClick={onToggle} style={{ padding:'16px 20px', cursor:'pointer', display:'flex', alignItems:'center', gap:12 }}>
-        <div style={{ flex:1 }}>
-          <div style={{ fontWeight:600, fontSize:15, color:'#2C2C2A' }}>{server.server_name}</div>
-          <div style={{ fontSize:12, color:'#888', marginTop:2 }}>
-            {server.server_type} · {server.tools.length} tools · {server.user}
-          </div>
-          <RiskBar summary={server.risk_summary} />
-        </div>
-        <div style={{ display:'flex', gap:6 }}>
-          {['critical','high','medium','low'].map(l => server.risk_summary[l] ? (
-            <span key={l} style={{ background:COLORS[l], color:'#fff', borderRadius:10, padding:'2px 8px', fontSize:11, fontWeight:600 }}>
-              {l[0].toUpperCase()} {server.risk_summary[l]}
-            </span>
-          ) : null)}
-        </div>
-        <div style={{ color:'#888', fontSize:18 }}>{expanded ? '▲' : '▼'}</div>
+    <div>
+      <SectionHeader title="MCP Discovery" sub="Servers, tools, and usage patterns across all sessions" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 28 }}>
+        <StatCard label="MCP Servers" value={registry.length} color={T.accent} />
+        <StatCard label="Total Tools" value={totalTools} />
+        <StatCard label="Critical / High" value={`${criticalTools} / ${highTools}`} color={criticalTools > 0 ? T.red : T.amber} />
+        <StatCard label="Ungoverned" value={ungovernedCount} sub="No policy coverage" color={ungovernedCount > 0 ? T.red : T.green} />
       </div>
 
-      {expanded && (
-        <div style={{ borderTop:'1px solid #F1EFE8', padding:'12px 20px 16px' }}>
-          {server.server_url && (
-            <div style={{ fontSize:11, color:'#888', paddingBottom:10, fontFamily:'monospace' }}>{server.server_url}</div>
-          )}
-          <div style={{ display:'flex', gap:4, marginBottom:14, background:'#F9F8F5', borderRadius:8, padding:3, width:'fit-content' }}>
-            <button style={tabStyle(activeTab==='tools')}    onClick={() => setActiveTab('tools')}>Tools</button>
-            <button style={tabStyle(activeTab==='registry')} onClick={() => setActiveTab('registry')}>Tool Registry</button>
-          </div>
+      {registry.length === 0 ? <EmptyState message="No MCP servers enrolled yet." /> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {registry.map(server => {
+            const stats = serverStats.get(server.server_name);
+            const isExpanded = expanded === server.server_name;
+            const riskBars = ['critical', 'high', 'medium', 'low'].filter(l => server.risk_summary[l] > 0);
+            return (
+              <div key={server.server_name} style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
+                <div onClick={() => setExpanded(isExpanded ? null : server.server_name)}
+                  style={{ padding: '16px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ fontWeight: 600, fontSize: 14 }}>{server.server_name}</span>
+                      <span style={{ fontSize: 11, color: T.gray400, background: T.gray100, padding: '2px 8px', borderRadius: 4 }}>{server.server_type}</span>
+                    </div>
+                    {server.server_url && <div style={{ fontSize: 11, color: T.gray400, fontFamily: T.mono, marginTop: 4 }}>{server.server_url}</div>}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    {riskBars.map(l => (
+                      <span key={l} style={{ fontSize: 11, fontWeight: 600, color: SENSITIVITY_COLORS[l].fg, background: SENSITIVITY_COLORS[l].bg, padding: '2px 8px', borderRadius: 4 }}>
+                        {l[0].toUpperCase()}{server.risk_summary[l]}
+                      </span>
+                    ))}
+                    {stats && <span style={{ fontSize: 11, color: T.gray400, marginLeft: 8 }}>{stats.calls} calls</span>}
+                  </div>
+                  <span style={{ color: T.gray400, fontSize: 12, transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+                </div>
 
-          {activeTab === 'tools' && (
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
-              <thead>
-                <tr style={{ borderBottom:'1px solid #F1EFE8' }}>
-                  {['Tool','Sensitivity','Reason'].map(h => (
-                    <th key={h} style={{ textAlign:'left', padding:'8px 0', color:'#888', fontWeight:500 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {server.tools.map((tool: any, i: number) => (
-                  <tr key={i} style={{ borderBottom:'1px solid #F9F8F5' }}>
-                    <td style={{ padding:'8px 0', fontFamily:'monospace', color:'#3C3489' }}>{tool.name}</td>
-                    <td style={{ padding:'8px 0' }}><Badge level={tool.sensitivity} /></td>
-                    <td style={{ padding:'8px 0', color:'#5F5E5A', fontSize:12 }}>{tool.sensitivity_reason}</td>
+                {isExpanded && (
+                  <div style={{ borderTop: `1px solid ${T.gray200}`, padding: '0' }}>
+                    <table style={tableStyle}>
+                      <thead><tr>
+                        {['Tool Name', 'Sensitivity', 'Source', 'Calls', 'Denies'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>{server.tools.map((tool, i) => {
+                        const toolDecisions = decisions.filter(d => d.tool === tool.name || d.tool?.includes(tool.name));
+                        const toolDenies = toolDecisions.filter(d => d.effect === 'Deny').length;
+                        return (
+                          <tr key={i}>
+                            <td style={{ ...tdStyle, ...monoStyle }}>{tool.name}</td>
+                            <td style={tdStyle}><SensitivityBadge level={tool.sensitivity} /></td>
+                            <td style={tdStyle}><span style={{ fontSize: 11, color: T.gray500 }}>{tool.sensitivity_reason || tool.source || '—'}</span></td>
+                            <td style={tdStyle}>{toolDecisions.length}</td>
+                            <td style={tdStyle}>{toolDenies > 0 ? <span style={{ color: T.red, fontWeight: 600 }}>{toolDenies}</span> : '0'}</td>
+                          </tr>
+                        );
+                      })}</tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Section C: Usage Analytics & Risk ────────────────────────────
+function UsageAnalytics({ decisions, sessions }: { decisions: Decision[]; sessions: Session[] }) {
+  const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [selectedUser, setSelectedUser] = useState<string | null>(null);
+
+  // Per-user risk scores
+  const userRisk = useMemo(() => {
+    const map = new Map<string, { user: string; total: number; denies: number; hitls: number; hitlApproved: number; hitlTimeout: number; guardrailBlocks: number; promptDenials: number; avgTrust: number; trustSum: number; decisions: Decision[] }>();
+    decisions.forEach(d => {
+      if (!map.has(d.user_email)) map.set(d.user_email, { user: d.user_email, total: 0, denies: 0, hitls: 0, hitlApproved: 0, hitlTimeout: 0, guardrailBlocks: 0, promptDenials: 0, avgTrust: 0, trustSum: 0, decisions: [] });
+      const u = map.get(d.user_email)!;
+      u.total++;
+      u.decisions.push(d);
+      if (d.trust_score !== undefined) u.trustSum += d.trust_score;
+      if (d.effect === 'Deny') u.denies++;
+      if (d.effect === 'HITL') u.hitls++;
+      if (d.reason?.includes('HITL approved')) u.hitlApproved++;
+      if (d.reason?.includes('timeout')) u.hitlTimeout++;
+      if (d.tool === 'prompt' && d.effect === 'Deny') u.promptDenials++;
+      if (d.scores?.injection_score > 50 || d.scores?.jailbreak_score > 50 || d.scores?.escalation_score > 50) u.guardrailBlocks++;
+    });
+    return Array.from(map.values()).map(u => {
+      const denyRate = u.total > 0 ? u.denies / u.total : 0;
+      const guardrailRate = u.total > 0 ? u.guardrailBlocks / u.total : 0;
+      const promptDenialRate = u.total > 0 ? u.promptDenials / u.total : 0;
+      const hitlApprovalRate = u.hitls > 0 ? u.hitlApproved / u.hitls : 1;
+      const hitlTimeoutRate = u.hitls > 0 ? u.hitlTimeout / u.hitls : 0;
+      const riskScore = Math.round((0.3 * denyRate + 0.25 * guardrailRate + 0.2 * promptDenialRate + 0.15 * (1 - hitlApprovalRate) + 0.1 * hitlTimeoutRate) * 100);
+      return { ...u, denyRate, riskScore, hitlApprovalRate, avgTrust: u.total > 0 ? Math.round(u.trustSum / u.total) : 0 };
+    }).sort((a, b) => b.riskScore - a.riskScore);
+  }, [decisions]);
+
+  // Aggregate stats
+  const totalDecisions = decisions.length;
+  const totalDenies = decisions.filter(d => d.effect === 'Deny').length;
+  const totalHITL = decisions.filter(d => d.effect === 'HITL').length;
+  const avgLatency = decisions.filter(d => d.cedar_latency_ms).reduce((a, d) => a + (d.cedar_latency_ms || 0), 0) / (decisions.filter(d => d.cedar_latency_ms).length || 1);
+
+  // Session timeline
+  const sessionDecisions = selectedSession
+    ? decisions.filter(d => d.session_id === selectedSession).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    : [];
+
+  // User detail
+  const userDetail = selectedUser ? userRisk.find(u => u.user === selectedUser) : null;
+
+  // Guardrail score keys to display
+  const GUARDRAIL_KEYS = [
+    'injection_score', 'jailbreak_score', 'escalation_score', 'exfiltration_score',
+    'sod_score', 'velocity_score', 'after_hours_score', 'bypass_attempts_score',
+    'bulk_operation_score', 'intent_mismatch_score', 'intent_pool_score',
+  ];
+
+  return (
+    <div>
+      <SectionHeader title="Usage Analytics & Risk" sub="Per-user risk scoring, guardrail breakdown, and session drill-down" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 28 }}>
+        <StatCard label="Total Decisions" value={totalDecisions} color={T.accent} />
+        <StatCard label="Denies" value={totalDenies} sub={`${totalDecisions > 0 ? Math.round((totalDenies / totalDecisions) * 100) : 0}% deny rate`} color={T.red} />
+        <StatCard label="HITL Triggers" value={totalHITL} color={T.amber} />
+        <StatCard label="Avg Cedar Latency" value={`${Math.round(avgLatency)}ms`} />
+      </div>
+
+      {/* User Risk Table */}
+      {!selectedUser && !selectedSession && (
+        <>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Risk Scores by Developer</div>
+          {userRisk.length === 0 ? <EmptyState message="No usage data yet." /> : (
+            <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden', marginBottom: 32 }}>
+              <table style={tableStyle}>
+                <thead><tr>
+                  {['Developer', 'Risk Score', 'Decisions', 'Deny Rate', 'HITL', 'Avg Trust', 'Actions'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+                </tr></thead>
+                <tbody>{userRisk.map(u => (
+                  <tr key={u.user}>
+                    <td style={{ ...tdStyle, fontWeight: 500 }}>{u.user}</td>
+                    <td style={tdStyle}>
+                      <span style={{
+                        display: 'inline-block', padding: '2px 12px', borderRadius: 20, fontWeight: 700, fontSize: 12,
+                        color: u.riskScore > 40 ? T.red : u.riskScore > 15 ? T.amber : T.green,
+                        background: u.riskScore > 40 ? T.redBg : u.riskScore > 15 ? T.amberBg : T.greenBg,
+                      }}>{u.riskScore}</span>
+                    </td>
+                    <td style={tdStyle}>{u.total}</td>
+                    <td style={tdStyle}><span style={{ fontWeight: 600, color: u.denyRate > 0.2 ? T.red : T.gray600 }}>{Math.round(u.denyRate * 100)}%</span></td>
+                    <td style={tdStyle}>{u.hitls} <span style={{ color: T.gray400, fontSize: 11 }}>({Math.round(u.hitlApprovalRate * 100)}% approved)</span></td>
+                    <td style={tdStyle}>{u.avgTrust}</td>
+                    <td style={tdStyle}>
+                      <button onClick={() => setSelectedUser(u.user)} style={{ fontSize: 11, padding: '4px 12px', borderRadius: 6, background: T.accentLight, color: T.accent, border: 'none', cursor: 'pointer', fontWeight: 600 }}>Detail</button>
+                    </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                ))}</tbody>
+              </table>
+            </div>
           )}
 
-          {activeTab === 'registry' && (
-            <ToolRegistry serverUrl={server.server_url} serverName={server.server_name} />
+          {/* Decision Feed */}
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Decision Feed</div>
+          <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
+            <table style={tableStyle}>
+              <thead><tr>
+                {['Time', 'User', 'Tool', 'Intent', 'Sensitivity', 'Decision', 'Trust', 'Prompt', 'Cedar Policy', 'Latency'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+              </tr></thead>
+              <tbody>{decisions.slice(0, 50).map((d, i) => (
+                <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelectedSession(d.session_id)}>
+                  <td style={{ ...tdStyle, color: T.gray500, fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(d.timestamp).toLocaleTimeString()}</td>
+                  <td style={{ ...tdStyle, fontSize: 12 }}>{d.user_email}</td>
+                  <td style={{ ...tdStyle, ...monoStyle, fontSize: 11 }}>{d.tool}</td>
+                  <td style={{ ...tdStyle, fontSize: 12 }}>{d.intent || '—'}</td>
+                  <td style={tdStyle}><SensitivityBadge level={d.sensitivity} /></td>
+                  <td style={tdStyle}><EffectBadge effect={d.effect} /></td>
+                  <td style={{ ...tdStyle, fontSize: 12, fontWeight: 600, color: (d.trust_score ?? 70) < 30 ? T.red : (d.trust_score ?? 70) < 50 ? T.amber : T.gray600 }}>{d.trust_score ?? '—'}</td>
+                  <td style={{ ...tdStyle, fontSize: 11, color: T.gray500, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.prompt || '—'}</td>
+                  <td style={{ ...tdStyle, fontSize: 11, color: T.gray500 }}>{d.cedar_policy_name || '—'}</td>
+                  <td style={{ ...tdStyle, fontSize: 11, color: T.gray400 }}>{d.cedar_latency_ms ? `${d.cedar_latency_ms}ms` : '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {/* User Detail Drill-down */}
+      {selectedUser && userDetail && !selectedSession && (
+        <div>
+          <button onClick={() => setSelectedUser(null)} style={{ fontSize: 12, color: T.accent, background: 'none', border: 'none', cursor: 'pointer', marginBottom: 16, fontWeight: 600 }}>← Back to risk table</button>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>{userDetail.user} — Risk Detail</div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 28 }}>
+            <StatCard label="Risk Score" value={userDetail.riskScore} color={userDetail.riskScore > 40 ? T.red : userDetail.riskScore > 15 ? T.amber : T.green} />
+            <StatCard label="Avg Trust Score" value={userDetail.avgTrust} />
+            <StatCard label="Deny Rate" value={`${Math.round(userDetail.denyRate * 100)}%`} color={userDetail.denyRate > 0.2 ? T.red : T.green} />
+          </div>
+
+          {/* Guardrail Breakdown */}
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Guardrail Score Breakdown</div>
+          <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden', marginBottom: 28 }}>
+            <table style={tableStyle}>
+              <thead><tr>
+                {['Guardrail', 'Max Score', 'Avg Score', 'Triggers (>50)'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+              </tr></thead>
+              <tbody>{GUARDRAIL_KEYS.map(key => {
+                const vals = userDetail.decisions.filter(d => d.scores?.[key] !== undefined).map(d => d.scores![key] as number);
+                const max = vals.length > 0 ? Math.max(...vals) : 0;
+                const avg = vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
+                const triggers = vals.filter(v => v > 50).length;
+                return (
+                  <tr key={key}>
+                    <td style={{ ...tdStyle, ...monoStyle, fontSize: 11 }}>{key.replace(/_/g, ' ')}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600, color: max > 50 ? T.red : T.gray600 }}>{max}</td>
+                    <td style={tdStyle}>{avg}</td>
+                    <td style={tdStyle}>{triggers > 0 ? <span style={{ color: T.red, fontWeight: 600 }}>{triggers}</span> : '0'}</td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+
+          {/* User Decisions */}
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Decision History</div>
+          <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
+            <table style={tableStyle}>
+              <thead><tr>
+                {['Time', 'Tool', 'Decision', 'Sensitivity', 'Trust', 'Agent Type', 'Cmd Risk', 'Zone', 'Prompt'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+              </tr></thead>
+              <tbody>{userDetail.decisions.slice(0, 100).map((d, i) => (
+                <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelectedSession(d.session_id)}>
+                  <td style={{ ...tdStyle, fontSize: 11, color: T.gray500, whiteSpace: 'nowrap' }}>{new Date(d.timestamp).toLocaleTimeString()}</td>
+                  <td style={{ ...tdStyle, ...monoStyle, fontSize: 11 }}>{d.tool}</td>
+                  <td style={tdStyle}><EffectBadge effect={d.effect} /></td>
+                  <td style={tdStyle}><SensitivityBadge level={d.sensitivity} /></td>
+                  <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12 }}>{d.trust_score ?? '—'}</td>
+                  <td style={{ ...tdStyle, fontSize: 11 }}>{d.agent_type || '—'}</td>
+                  <td style={{ ...tdStyle, fontSize: 11 }}>{d.command_risk || '—'}</td>
+                  <td style={{ ...tdStyle, fontSize: 11 }}>{d.file_zone || '—'}</td>
+                  <td style={{ ...tdStyle, fontSize: 11, color: T.gray500, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.prompt || '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Session Timeline Drill-down */}
+      {selectedSession && (
+        <div>
+          <button onClick={() => setSelectedSession(null)} style={{ fontSize: 12, color: T.accent, background: 'none', border: 'none', cursor: 'pointer', marginBottom: 16, fontWeight: 600 }}>← Back</button>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Session Timeline</div>
+          <div style={{ fontSize: 12, color: T.gray400, fontFamily: T.mono, marginBottom: 20 }}>{selectedSession}</div>
+
+          {sessionDecisions.length === 0 ? <EmptyState message="No decisions recorded for this session." /> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 0, border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
+              {sessionDecisions.map((d, i) => (
+                <div key={i} style={{ padding: '14px 20px', borderBottom: i < sessionDecisions.length - 1 ? `1px solid ${T.gray100}` : 'none', display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 64, fontSize: 11, color: T.gray400, paddingTop: 2 }}>{new Date(d.timestamp).toLocaleTimeString()}</div>
+                  <div style={{ minWidth: 60 }}><EffectBadge effect={d.effect} /></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ ...monoStyle, fontSize: 12 }}>{d.tool}</span>
+                      <SensitivityBadge level={d.sensitivity} />
+                      {d.intent && <span style={{ fontSize: 11, color: T.gray500 }}>intent: {d.intent}</span>}
+                      {d.trust_score !== undefined && <span style={{ fontSize: 11, fontWeight: 600, color: d.trust_score < 30 ? T.red : T.gray500 }}>trust: {d.trust_score}</span>}
+                      {d.agent_type && d.agent_type !== 'main' && <Badge text={d.agent_type} fg={T.amber} bg={T.amberBg} />}
+                      {d.command_risk && d.command_risk !== '' && <span style={{ fontSize: 11, color: d.command_risk === 'destructive' ? T.red : d.command_risk === 'restricted' ? T.amber : T.gray400 }}>cmd: {d.command_risk}</span>}
+                      {d.file_zone && d.file_zone !== '' && <span style={{ fontSize: 11, color: T.gray400 }}>zone: {d.file_zone}</span>}
+                    </div>
+                    {d.prompt && <div style={{ fontSize: 11, color: T.gray500, marginTop: 4, fontStyle: 'italic' }}>"{d.prompt}"</div>}
+                    {d.reason && d.reason !== 'Tool call permitted' && <div style={{ fontSize: 11, color: d.effect === 'Deny' ? T.red : T.gray400, marginTop: 2 }}>{d.reason}</div>}
+                    {d.cedar_policy_name && <div style={{ fontSize: 10, color: T.gray400, marginTop: 2 }}>Policy: {d.cedar_policy_name} · {d.cedar_latency_ms}ms</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
     </div>
   );
 }
+
+// ── Section D: Admin Classification Config ───────────────────────
+function AdminConfig() {
+  // Command classifications — editable
+  const [commands, setCommands] = useState([
+    { pattern: 'rm |drop table|truncate|delete from|mkfs|dd if=|>/dev/|kill -9|pkill|rmdir', risk: 'destructive' },
+    { pattern: 'npm install|pip install|yarn install|git push|git pull|git merge|git rebase|curl|wget|ssh |scp |docker build|docker run|kubectl|terraform|chmod|chown|nohup|psql|mysql|mongosh|pg_dump|mysqldump', risk: 'restricted' },
+    { pattern: '*', risk: 'safe' },
+  ]);
+
+  // File zone classifications — editable
+  const [zones, setZones] = useState([
+    { pattern: '.env|secrets|.pem|.key', zone: 'secrets' },
+    { pattern: 'package.json|tsconfig|.claude/', zone: 'config' },
+    { pattern: 'tests/|test/|.test.|.spec.', zone: 'tests' },
+    { pattern: 'src/|lib/|app/', zone: 'src' },
+    { pattern: 'docs/|README', zone: 'docs' },
+    { pattern: '*', zone: 'other' },
+  ]);
+
+  const [editingCmd, setEditingCmd] = useState<number | null>(null);
+  const [editingZone, setEditingZone] = useState<number | null>(null);
+  const [addingCmd, setAddingCmd] = useState(false);
+  const [addingZone, setAddingZone] = useState(false);
+  const [newCmd, setNewCmd] = useState({ pattern: '', risk: 'restricted' });
+  const [newZone, setNewZone] = useState({ pattern: '', zone: 'other' });
+
+  const RISK_OPTIONS = ['safe', 'restricted', 'destructive'];
+  const ZONE_OPTIONS = ['secrets', 'config', 'tests', 'src', 'docs', 'other'];
+
+  const riskColors: Record<string, { fg: string; bg: string }> = {
+    safe:        { fg: T.green, bg: T.greenBg },
+    restricted:  { fg: T.amber, bg: T.amberBg },
+    destructive: { fg: T.red,   bg: T.redBg },
+  };
+
+  const inputStyle: React.CSSProperties = {
+    fontSize: 12, padding: '6px 10px', borderRadius: 6,
+    border: `1px solid ${T.gray200}`, fontFamily: T.mono, width: '100%',
+  };
+  const selectStyle: React.CSSProperties = {
+    fontSize: 12, padding: '6px 10px', borderRadius: 6,
+    border: `1px solid ${T.gray200}`,
+  };
+  const btnPrimary: React.CSSProperties = {
+    fontSize: 11, padding: '5px 14px', borderRadius: 6,
+    background: T.accent, color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600,
+  };
+  const btnSecondary: React.CSSProperties = {
+    fontSize: 11, padding: '5px 14px', borderRadius: 6,
+    background: T.gray100, color: T.gray600, border: 'none', cursor: 'pointer', fontWeight: 500,
+  };
+
+  return (
+    <div>
+      <SectionHeader title="Admin Classification Config" sub="Configure command risk levels, file zone mappings, and generate Cedar policy templates" />
+
+      {/* Command Classification */}
+      <div style={{ marginBottom: 40 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Command Classification</div>
+          <button onClick={() => setAddingCmd(true)} style={btnPrimary}>+ Add Pattern</button>
+        </div>
+        <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
+          <table style={tableStyle}>
+            <thead><tr>
+              {['Pattern (regex)', 'Risk Level', 'Actions'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {addingCmd && (
+                <tr>
+                  <td style={tdStyle}><input value={newCmd.pattern} onChange={e => setNewCmd({ ...newCmd, pattern: e.target.value })} placeholder="regex pattern" style={inputStyle} /></td>
+                  <td style={tdStyle}>
+                    <select value={newCmd.risk} onChange={e => setNewCmd({ ...newCmd, risk: e.target.value })} style={selectStyle}>
+                      {RISK_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => { setCommands([...commands.slice(0, -1), newCmd, commands[commands.length - 1]]); setAddingCmd(false); setNewCmd({ pattern: '', risk: 'restricted' }); }} style={btnPrimary}>Save</button>
+                      <button onClick={() => setAddingCmd(false)} style={btnSecondary}>Cancel</button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {commands.map((cmd, i) => (
+                <tr key={i}>
+                  <td style={tdStyle}>
+                    {editingCmd === i ? (
+                      <input value={cmd.pattern} onChange={e => { const c = [...commands]; c[i] = { ...c[i], pattern: e.target.value }; setCommands(c); }} style={inputStyle} />
+                    ) : (
+                      <span style={{ fontFamily: T.mono, fontSize: 11, color: T.gray700, wordBreak: 'break-all' }}>{cmd.pattern === '*' ? '(default — all other commands)' : cmd.pattern}</span>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    {editingCmd === i ? (
+                      <select value={cmd.risk} onChange={e => { const c = [...commands]; c[i] = { ...c[i], risk: e.target.value }; setCommands(c); }} style={selectStyle}>
+                        {RISK_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    ) : (
+                      <Badge text={cmd.risk} fg={riskColors[cmd.risk]?.fg || T.gray500} bg={riskColors[cmd.risk]?.bg || T.gray100} />
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    {cmd.pattern !== '*' && (
+                      editingCmd === i ? (
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button onClick={() => setEditingCmd(null)} style={btnPrimary}>Done</button>
+                          <button onClick={() => { setCommands(commands.filter((_, j) => j !== i)); setEditingCmd(null); }} style={{ ...btnSecondary, color: T.red }}>Delete</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setEditingCmd(i)} style={btnSecondary}>Edit</button>
+                      )
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* File Zone Classification */}
+      <div style={{ marginBottom: 40 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>File Zone Classification</div>
+          <button onClick={() => setAddingZone(true)} style={btnPrimary}>+ Add Pattern</button>
+        </div>
+        <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
+          <table style={tableStyle}>
+            <thead><tr>
+              {['Path Pattern', 'Zone', 'Actions'].map(h => <th key={h} style={thStyle}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {addingZone && (
+                <tr>
+                  <td style={tdStyle}><input value={newZone.pattern} onChange={e => setNewZone({ ...newZone, pattern: e.target.value })} placeholder="path pattern" style={inputStyle} /></td>
+                  <td style={tdStyle}>
+                    <select value={newZone.zone} onChange={e => setNewZone({ ...newZone, zone: e.target.value })} style={selectStyle}>
+                      {ZONE_OPTIONS.map(z => <option key={z} value={z}>{z}</option>)}
+                    </select>
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => { setZones([...zones.slice(0, -1), newZone, zones[zones.length - 1]]); setAddingZone(false); setNewZone({ pattern: '', zone: 'other' }); }} style={btnPrimary}>Save</button>
+                      <button onClick={() => setAddingZone(false)} style={btnSecondary}>Cancel</button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {zones.map((z, i) => (
+                <tr key={i}>
+                  <td style={tdStyle}>
+                    {editingZone === i ? (
+                      <input value={z.pattern} onChange={e => { const zs = [...zones]; zs[i] = { ...zs[i], pattern: e.target.value }; setZones(zs); }} style={inputStyle} />
+                    ) : (
+                      <span style={{ fontFamily: T.mono, fontSize: 11, color: T.gray700 }}>{z.pattern === '*' ? '(default — all other paths)' : z.pattern}</span>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    {editingZone === i ? (
+                      <select value={z.zone} onChange={e => { const zs = [...zones]; zs[i] = { ...zs[i], zone: e.target.value }; setZones(zs); }} style={selectStyle}>
+                        {ZONE_OPTIONS.map(zo => <option key={zo} value={zo}>{zo}</option>)}
+                      </select>
+                    ) : (
+                      <span style={{ fontSize: 12, fontWeight: 500, color: z.zone === 'secrets' ? T.red : z.zone === 'src' ? T.accent : T.gray600 }}>{z.zone}</span>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    {z.pattern !== '*' && (
+                      editingZone === i ? (
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button onClick={() => setEditingZone(null)} style={btnPrimary}>Done</button>
+                          <button onClick={() => { setZones(zones.filter((_, j) => j !== i)); setEditingZone(null); }} style={{ ...btnSecondary, color: T.red }}>Delete</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setEditingZone(i)} style={btnSecondary}>Edit</button>
+                      )
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Policy Suggestion Engine */}
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Policy Suggestion Engine</div>
+        <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, padding: 24 }}>
+          <p style={{ fontSize: 13, color: T.gray500, marginBottom: 16 }}>
+            Based on current classifications, these Cedar policy templates can be generated for review and deployment to AVP.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {commands.filter(c => c.pattern !== '*').map((cmd, i) => (
+              <div key={`cmd-${i}`} style={{ background: T.gray50, borderRadius: T.radius, padding: '12px 16px' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: T.accent, marginBottom: 6 }}>
+                  {cmd.risk === 'destructive' ? 'FORBID' : 'PERMIT WHEN'} — Command: {cmd.risk}
+                </div>
+                <pre style={{ fontFamily: T.mono, fontSize: 11, color: T.gray700, whiteSpace: 'pre-wrap', margin: 0 }}>
+{cmd.risk === 'destructive'
+  ? `forbid (principal, action == Action::"RunBash", resource)
+when { resource.command_risk == "destructive" };`
+  : `permit (principal, action == Action::"RunBash", resource)
+when {
+  resource.command_risk == "${cmd.risk}"
+  && context.approver_consent == true
+};`}
+                </pre>
+              </div>
+            ))}
+            {zones.filter(z => z.zone === 'secrets').map((z, i) => (
+              <div key={`zone-${i}`} style={{ background: T.gray50, borderRadius: T.radius, padding: '12px 16px' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: T.red, marginBottom: 6 }}>FORBID — File Zone: secrets</div>
+                <pre style={{ fontFamily: T.mono, fontSize: 11, color: T.gray700, whiteSpace: 'pre-wrap', margin: 0 }}>
+{`forbid (principal, action, resource)
+when { resource.file_zone == "secrets" };`}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── App Shell ────────────────────────────────────────────────────
+type TabKey = 'inventory' | 'discovery' | 'analytics' | 'admin';
+
+const NAV_ITEMS: { key: TabKey; label: string; icon: string }[] = [
+  { key: 'inventory', label: 'Agent Inventory', icon: '◉' },
+  { key: 'discovery', label: 'MCP Discovery',   icon: '⬡' },
+  { key: 'analytics', label: 'Usage & Risk',    icon: '◈' },
+  { key: 'admin',     label: 'Admin Config',    icon: '⚙' },
+];
 
 function App() {
-  const [registry,  setRegistry]  = useState<any[]>([]);
-  const [sessions,  setSessions]  = useState<any[]>([]);
-  const [decisions, setDecisions] = useState<any[]>([]);
-  const [expanded,  setExpanded]  = useState<Set<string>>(new Set());
-  const [tab,       setTab]       = useState<'registry'|'sessions'|'decisions'>('registry');
-  const [loading,   setLoading]   = useState(true);
+  const [tab, setTab] = useState<TabKey>('inventory');
+  const [loading, setLoading] = useState(true);
+  const [registry, setRegistry] = useState<ServerEntry[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
 
   useEffect(() => {
     const load = async () => {
       try {
         const [reg, sess, dec] = await Promise.all([
-          fetch(`${API}/api/registry`).then(r=>r.json()),
-          fetch(`${API}/api/sessions`).then(r=>r.json()),
-          fetch(`${API}/api/decisions`).then(r=>r.json()),
+          fetchJSON('/api/registry'), fetchJSON('/api/sessions'), fetchJSON('/api/decisions'),
         ]);
-        setRegistry(reg.registry||[]);
-        setSessions(sess.sessions||[]);
-        setDecisions(dec.decisions||[]);
-      } catch(e) { console.error(e); }
+        setRegistry(reg.registry || []);
+        setSessions(sess.sessions || []);
+        setDecisions(dec.decisions || []);
+      } catch (e) { console.error('Load error:', e); }
       finally { setLoading(false); }
     };
     load();
@@ -341,119 +798,66 @@ function App() {
     return () => clearInterval(iv);
   }, []);
 
-  const toggleExpand = (name: string) =>
-    setExpanded(prev => { const n = new Set(prev); n.has(name)?n.delete(name):n.add(name); return n; });
-
-  const totalTools    = registry.reduce((a,s)=>a+s.tools.length, 0);
-  const criticalCount = registry.reduce((a,s)=>a+(s.risk_summary.critical||0), 0);
-  const highCount     = registry.reduce((a,s)=>a+(s.risk_summary.high||0), 0);
-
-  const tabStyle = (active: boolean) => ({
-    padding:'8px 20px', borderRadius:8, cursor:'pointer',
-    fontWeight: active?600:400, background: active?'#EEEDFE':'transparent',
-    color: active?'#534AB7':'#5F5E5A', border:'none', fontSize:14,
-  });
-
   return (
-    <div style={{ fontFamily:'system-ui, sans-serif', background:'#F9F8F5', minHeight:'100vh' }}>
-      <div style={{ background:'#26215C', padding:'0 32px', display:'flex', alignItems:'center', height:56 }}>
-        <span style={{ color:'#fff', fontWeight:700, fontSize:18, letterSpacing:-0.5 }}>Reva</span>
-        <span style={{ color:'#AFA9EC', fontSize:14, marginLeft:8 }}>MCP Server Registry</span>
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#fff' }}>
+      {/* Sidebar */}
+      <div style={{
+        width: 240, borderRight: `1px solid ${T.gray200}`, display: 'flex', flexDirection: 'column',
+        flexShrink: 0, position: 'sticky', top: 0, height: '100vh',
+      }}>
+        {/* Logo */}
+        <div style={{ padding: '24px 24px 28px', borderBottom: `1px solid ${T.gray200}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: 8, background: T.accent,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontWeight: 700, fontSize: 14,
+            }}>R</div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15, color: T.gray900 }}>Reva</div>
+              <div style={{ fontSize: 11, color: T.gray400 }}>Governance Console</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <nav style={{ padding: '12px 12px', flex: 1 }}>
+          {NAV_ITEMS.map(item => {
+            const active = tab === item.key;
+            return (
+              <button key={item.key} onClick={() => setTab(item.key)} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                width: '100%', padding: '10px 12px', marginBottom: 2,
+                borderRadius: T.radius, border: 'none', cursor: 'pointer',
+                background: active ? T.accentLight : 'transparent',
+                color: active ? T.accent : T.gray500,
+                fontWeight: active ? 600 : 400, fontSize: 13,
+                textAlign: 'left', transition: 'all 0.15s',
+              }}>
+                <span style={{ fontSize: 14, width: 20, textAlign: 'center' }}>{item.icon}</span>
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Footer */}
+        <div style={{ padding: '16px 24px', borderTop: `1px solid ${T.gray200}`, fontSize: 11, color: T.gray400 }}>
+          Claude Code Plugin v1.0
+        </div>
       </div>
 
-      <div style={{ maxWidth:1100, margin:'0 auto', padding:'32px 24px' }}>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:16, marginBottom:32 }}>
-          {[
-            { label:'MCP Servers',    value:registry.length, color:'#534AB7' },
-            { label:'Tools Enrolled', value:totalTools,       color:'#0F6E56' },
-            { label:'Critical Tools', value:criticalCount,    color:'#A32D2D' },
-            { label:'High Risk Tools',value:highCount,        color:'#854F0B' },
-          ].map(stat => (
-            <div key={stat.label} style={{ background:'#fff', borderRadius:12, padding:'20px 24px', border:'1px solid #E8E7E0' }}>
-              <div style={{ fontSize:28, fontWeight:700, color:stat.color }}>{stat.value}</div>
-              <div style={{ fontSize:13, color:'#888', marginTop:4 }}>{stat.label}</div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display:'flex', gap:4, marginBottom:24, background:'#fff', borderRadius:10, padding:4, border:'1px solid #E8E7E0', width:'fit-content' }}>
-          {(['registry','sessions','decisions'] as const).map(t => (
-            <button key={t} style={tabStyle(tab===t)} onClick={() => setTab(t)}>
-              {t==='registry'?'MCP Server Registry':t==='sessions'?'Active Sessions':'Decision Feed'}
-            </button>
-          ))}
-        </div>
-
-        {loading && <div style={{ color:'#888', padding:32, textAlign:'center' }}>Loading...</div>}
-
-        {!loading && tab==='registry' && (
-          <div>
-            {registry.length===0 && (
-              <div style={{ background:'#fff', borderRadius:12, padding:48, textAlign:'center', color:'#888', border:'1px solid #E8E7E0' }}>
-                No MCP servers enrolled yet. Run a discovery call to populate the registry.
-              </div>
-            )}
-            {registry.map(server => (
-              <ServerCard key={server.server_name} server={server}
-                expanded={expanded.has(server.server_name)} onToggle={() => toggleExpand(server.server_name)} />
-            ))}
-          </div>
-        )}
-
-        {!loading && tab==='sessions' && (
-          <div style={{ background:'#fff', borderRadius:12, border:'1px solid #E8E7E0', overflow:'hidden' }}>
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
-              <thead>
-                <tr style={{ background:'#F9F8F5', borderBottom:'1px solid #E8E7E0' }}>
-                  {['Session ID','User','Enrolled At','Tools','Locked'].map(h => (
-                    <th key={h} style={{ textAlign:'left', padding:'12px 16px', color:'#5F5E5A', fontWeight:500 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sessions.map((s,i) => (
-                  <tr key={i} style={{ borderBottom:'1px solid #F1EFE8' }}>
-                    <td style={{ padding:'12px 16px', fontFamily:'monospace', fontSize:12 }}>{s.session_id}</td>
-                    <td style={{ padding:'12px 16px' }}>{s.user_email}</td>
-                    <td style={{ padding:'12px 16px', color:'#888' }}>{new Date(s.enrolled_at).toLocaleString()}</td>
-                    <td style={{ padding:'12px 16px' }}>{s.tool_count}</td>
-                    <td style={{ padding:'12px 16px' }}>{s.locked?'🔒 Yes':'No'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {!loading && tab==='decisions' && (
-          <div style={{ background:'#fff', borderRadius:12, border:'1px solid #E8E7E0', overflow:'hidden' }}>
-            {decisions.length===0 && <div style={{ padding:48, textAlign:'center', color:'#888' }}>No decisions yet.</div>}
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
-              <thead>
-                <tr style={{ background:'#F9F8F5', borderBottom:'1px solid #E8E7E0' }}>
-                  {['Time','User','Tool','Sensitivity','Decision','Reason'].map(h => (
-                    <th key={h} style={{ textAlign:'left', padding:'12px 16px', color:'#5F5E5A', fontWeight:500 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {decisions.map((d,i) => (
-                  <tr key={i} style={{ borderBottom:'1px solid #F1EFE8' }}>
-                    <td style={{ padding:'12px 16px', color:'#888', fontSize:11 }}>{new Date(d.timestamp).toLocaleTimeString()}</td>
-                    <td style={{ padding:'12px 16px' }}>{d.user_email}</td>
-                    <td style={{ padding:'12px 16px', fontFamily:'monospace', color:'#3C3489' }}>{d.tool}</td>
-                    <td style={{ padding:'12px 16px' }}><Badge level={d.sensitivity} /></td>
-                    <td style={{ padding:'12px 16px' }}>
-                      <span style={{ color: d.effect==='Permit'?'#0F6E56':d.effect==='Deny'?'#A32D2D':'#854F0B', fontWeight:600 }}>
-                        {d.effect}
-                      </span>
-                    </td>
-                    <td style={{ padding:'12px 16px', color:'#5F5E5A' }}>{d.reason}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      {/* Main Content */}
+      <div style={{ flex: 1, padding: '32px 40px', maxWidth: 1200, minWidth: 0 }}>
+        {loading ? (
+          <div style={{ padding: 64, textAlign: 'center', color: T.gray400, fontSize: 14 }}>Loading...</div>
+        ) : (
+          <>
+            {tab === 'inventory' && <AgentInventory sessions={sessions} decisions={decisions} />}
+            {tab === 'discovery' && <MCPDiscovery registry={registry} decisions={decisions} />}
+            {tab === 'analytics' && <UsageAnalytics decisions={decisions} sessions={sessions} />}
+            {tab === 'admin' && <AdminConfig />}
+          </>
         )}
       </div>
     </div>
