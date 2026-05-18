@@ -41,10 +41,11 @@ interface SessionStartInput {
   cwd:             string;
   env?: Record<string, string>;
   // Enriched fields from curl (Option B)
-  os_type?:      string;
-  hostname?:     string;
-  model?:        string;
-  mcp_config?:   any;
+  os_type?:          string;
+  hostname?:         string;
+  model?:            string;
+  mcp_config?:       any;
+  mcp_server_names?: string;  // comma-separated, from grep extraction
   // Legacy fields
   mcp_servers?:    string[];
   allowed_tools?:  string[];
@@ -67,8 +68,9 @@ export async function handleSessionStart(req: Request, res: Response) {
 
     // Parse MCP servers from local .mcp.json (Option B)
     const mcpFromConfig = parseMcpServers(body.mcp_config);
+    const mcpFromNames  = body.mcp_server_names ? body.mcp_server_names.split(',').map(s => s.trim()).filter(s => s.length > 0) : [];
     const mcpFromBody   = body.mcp_servers || [];
-    const mcp_servers   = [...new Set([...mcpFromConfig, ...mcpFromBody])];
+    const mcp_servers   = [...new Set([...mcpFromConfig, ...mcpFromNames, ...mcpFromBody])];
 
     // Generate synthetic agent ID (deterministic per user+machine)
     const agent_id = generateAgentId(os_user, hostname || 'localhost');
