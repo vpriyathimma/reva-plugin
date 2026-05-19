@@ -15,6 +15,10 @@ export interface EnrolledSession {
   model?:        string;
   mcp_servers_discovered?: string[];
   project_name?: string;
+  // SPIRE workload identity
+  spiffe_id?:      string;
+  spire_entry_id?: string;
+  oauth_email?:    string;
 }
 
 // In-memory session store
@@ -52,7 +56,7 @@ export function enrollSession(
   session_id: string,
   user_email: string,
   tools: ClassifiedTool[],
-  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string }
+  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string }
 ): EnrolledSession {
   const uniqueServers = [...new Set(tools.map(t => t.server_name))];
 
@@ -70,10 +74,13 @@ export function enrollSession(
     model:                 extra?.model,
     mcp_servers_discovered: extra?.mcp_servers_discovered,
     project_name:          extra?.project_name,
+    spiffe_id:             extra?.spiffe_id,
+    spire_entry_id:        extra?.spire_entry_id,
+    oauth_email:           extra?.oauth_email,
   };
 
   sessionStore.set(session_id, session);
-  console.log(`Session enrolled: ${session_id} | user: ${user_email} | tools: ${tools.length} | agent: ${extra?.agent_id || 'none'} | model: ${extra?.model || 'plan default'}`);
+  console.log(`Session enrolled: ${session_id} | user: ${user_email} | tools: ${tools.length} | agent: ${extra?.agent_id || 'none'} | spiffe: ${extra?.spiffe_id || 'none'} | model: ${extra?.model || 'plan default'}`);
   return session;
 }
 

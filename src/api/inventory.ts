@@ -131,6 +131,8 @@ router.get('/sessions', (_req, res) => {
     model:          s.model        || '',
     project_name:   s.project_name || '',
     mcp_servers_discovered: s.mcp_servers_discovered || [],
+    spiffe_id:      s.spiffe_id    || '',
+    oauth_email:    s.oauth_email  || '',
   }));
   res.json({ sessions, total: sessions.length });
 });

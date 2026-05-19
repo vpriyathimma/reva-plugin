@@ -3,7 +3,7 @@ import { classifyToolCall }      from '../../api/intentClassifier';
 import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
-import { claudeSessionUserStore } from './onSessionStart';
+import { claudeSessionUserStore, spiffeIdStore } from './onSessionStart';
 import { recordDynamicTool, discoveredServers } from '../../api/mcpProbe';
 import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
@@ -176,6 +176,9 @@ export async function handleToolCall(req: Request, res: Response) {
     const mcpServer = mcpParts[1] || 'claude-code';
     const mcpTool   = mcpParts[2] || tool_name;
 
+    // Resolve SPIFFE ID for this session — developer only, not spawned agents
+    const spiffeId = derivedAgentType !== 'subagent' ? spiffeIdStore.get(session_id) : undefined;
+
     const cedarPayload = (client_source === 'claude-code' && isMCPTool)
       ? buildMCPToolPayload({
           osUser:          user_email,
@@ -188,6 +191,7 @@ export async function handleToolCall(req: Request, res: Response) {
           scores:          { ...result.scores, trust_score: result.trust_score },
           prompt:          query,
           prompt_history:  promptHistory,
+          spiffeId,
         })
       : client_source === 'claude-code'
       ? buildFileOperationPayload({
@@ -208,6 +212,7 @@ export async function handleToolCall(req: Request, res: Response) {
           scores:          { ...result.scores, trust_score: result.trust_score },
           prompt:          query,
           prompt_history:  promptHistory,
+          spiffeId,
         })
       : buildCallToolPayload({
           agentName,
@@ -308,8 +313,8 @@ export async function handleToolCall(req: Request, res: Response) {
 
           // Rebuild payload with hitlAcknowledged: true and re-evaluate
           const approvedPayload = (client_source === 'claude-code' && isMCPTool)
-            ? buildMCPToolPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown', toolName: mcpTool, serverName: mcpServer, agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory })
-            : buildFileOperationPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : 'claude-demo-project', toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory });
+            ? buildMCPToolPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown', toolName: mcpTool, serverName: mcpServer, agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId })
+            : buildFileOperationPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : 'claude-demo-project', toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId });
 
           const approvedCedar = await evaluateCedar(approvedPayload);
 

@@ -369,6 +369,7 @@ export function buildFileOperationPayload(params: {
   scores:           Record<string, any>;
   prompt?:          string;
   prompt_history?:  string[];
+  spiffeId?:        string;
 }) {
   const fileZone   = resolveFileZone(params.filePath || params.command || '');
   const cedarAction = mapToolToAction(params.toolName);
@@ -431,6 +432,7 @@ export function buildFileOperationPayload(params: {
       sod_violation:    params.scores.sod_violation     ?? false,
       prompt:           (params.prompt || '').slice(0, 500),
       prompt_history:   (params.prompt_history || []).slice(-3).join(' | ').slice(0, 500),
+      ...(params.spiffeId ? { spiffe_id: params.spiffeId } : {}),
     },
     session_id: params.sessionId,
   };
@@ -444,6 +446,7 @@ export function buildClaudeCodePromptPayload(params: {
   promptSnippet: string;
   bypassAttempt: boolean;
   scores:        Record<string, any>;
+  spiffeId?:     string;
 }) {
   return {
     principal: buildDeveloperPrincipal(params.osUser, 'main'),
@@ -465,6 +468,7 @@ export function buildClaudeCodePromptPayload(params: {
       bypass_attempt:   params.bypassAttempt,
       prompt_snippet:   params.promptSnippet.slice(0, 200),
       trust_score:      params.scores.trust_score ?? 70,
+      ...(params.spiffeId ? { spiffe_id: params.spiffeId } : {}),
     },
     session_id: params.sessionId,
   };
@@ -482,6 +486,7 @@ export function buildMCPToolPayload(params: {
   scores:           Record<string, any>;
   prompt?:          string;
   prompt_history?:  string[];
+  spiffeId?:        string;
 }) {
   const cedarAction = classifyMCPTool(params.toolName);
   const mcpToolId   = `${params.serverName}__${params.toolName}`;
@@ -517,6 +522,7 @@ export function buildMCPToolPayload(params: {
       exfiltration_score: params.scores.exfiltration_score ?? 0,
       prompt:           (params.prompt || '').slice(0, 500),
       prompt_history:   (params.prompt_history || []).slice(-3).join(' | ').slice(0, 500),
+      ...(params.spiffeId ? { spiffe_id: params.spiffeId } : {}),
     },
     session_id: params.sessionId,
   };

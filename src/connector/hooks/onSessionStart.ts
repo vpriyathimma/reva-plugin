@@ -11,10 +11,15 @@ import { enrollSession }     from '../discovery/enroll';
 import { getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 import { probeAllServers }   from '../../api/mcpProbe';
 
+const SPIRE_API_URL = process.env.SPIRE_API_URL || 'http://3.233.113.248:8090';
+
 // OS user store — maps Claude Code session_id to OS user
 export const claudeSessionUserStore = new Map<string, string>();
 
-// Agent ID store — maps os_user:hostname → synthetic agent ID
+// SPIFFE ID store — maps session_id → spiffe_id (for Cedar principal in subsequent hooks)
+export const spiffeIdStore = new Map<string, string>();
+
+// Agent ID store — maps os_user:hostname → synthetic agent ID (fallback)
 const agentIdStore = new Map<string, string>();
 
 function generateAgentId(osUser: string, hostname: string): string {
@@ -56,9 +61,49 @@ interface SessionStartInput {
   model?:            string;
   mcp_config?:       any;
   mcp_server_names?: string;  // comma-separated, from grep extraction
+  // SPIRE identity — from ~/.claude.json oauthAccount
+  oauth_account?: {
+    account_uuid: string;
+    display_name: string;
+    email:        string;
+  };
   // Legacy fields
   mcp_servers?:    string[];
   allowed_tools?:  string[];
+}
+
+// Register workload with SPIRE API — returns SPIFFE ID or null on failure
+async function registerWithSPIRE(account: { account_uuid: string; display_name: string; email: string }): Promise<{
+  spiffe_id: string;
+  entry_id:  string;
+  action:    string;
+} | null> {
+  if (!account.account_uuid) return null;
+
+  try {
+    const resp = await fetch(`${SPIRE_API_URL}/register`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(account),
+      signal:  AbortSignal.timeout(5000),  // 5s timeout — non-blocking
+    });
+
+    if (!resp.ok) {
+      console.warn(`[SPIRE] Register returned HTTP ${resp.status}`);
+      return null;
+    }
+
+    const data = await resp.json() as any;
+    console.log(`[SPIRE] ${data.action}: ${data.spiffe_id}`);
+    return {
+      spiffe_id: data.spiffe_id,
+      entry_id:  data.entry?.entry_id || '',
+      action:    data.action,
+    };
+  } catch (err: any) {
+    console.warn(`[SPIRE] Registration failed (non-blocking): ${err.message}`);
+    return null;
+  }
 }
 
 export async function handleSessionStart(req: Request, res: Response) {
@@ -82,15 +127,31 @@ export async function handleSessionStart(req: Request, res: Response) {
     const mcpFromBody   = body.mcp_servers || [];
     const mcp_servers   = [...new Set([...mcpFromConfig, ...mcpFromNames, ...mcpFromBody])];
 
-    // Generate synthetic agent ID (deterministic per user+machine)
-    const agent_id = generateAgentId(os_user, hostname || 'localhost');
+    // Generate synthetic agent ID (deterministic per user+machine) — fallback
+    const syntheticAgentId = generateAgentId(os_user, hostname || 'localhost');
+
+    // ── SPIRE registration — get cryptographic workload identity ──
+    let spiffe_id: string | undefined;
+    let spire_entry_id: string | undefined;
+    const oauthAccount = body.oauth_account;
+
+    if (oauthAccount?.account_uuid) {
+      const spireResult = await registerWithSPIRE(oauthAccount);
+      if (spireResult) {
+        spiffe_id      = spireResult.spiffe_id;
+        spire_entry_id = spireResult.entry_id;
+      }
+    }
+
+    // Agent ID: SPIFFE ID if available, else synthetic hash
+    const agent_id = spiffe_id || syntheticAgentId;
 
     // Trigger MCP tool discovery probe — async, non-blocking
     if (mcp_servers.length > 0) {
       probeAllServers(mcp_servers);
     }
 
-    console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} agent=${agent_id} mcp=[${mcp_servers.join(',')}]`);
+    console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} agent=${agent_id} spiffe=${spiffe_id || 'none'} mcp=[${mcp_servers.join(',')}]`);
 
     // Resolve identity and access
     const { allowed, identity, reason } = resolveSession(os_user, cwd);
@@ -114,6 +175,11 @@ export async function handleSessionStart(req: Request, res: Response) {
     // Store os_user for this session so PreToolUse can resolve identity
     claudeSessionUserStore.set(session_id, os_user);
 
+    // Store SPIFFE ID for subsequent hooks (PreToolUse, PostToolUse)
+    if (spiffe_id) {
+      spiffeIdStore.set(session_id, spiffe_id);
+    }
+
     // Build tool list for dashboard
     const tools = allowed_tools.map(tool_name => ({
       server_name:        tool_name.startsWith('mcp__') ? tool_name.split('__')[1] : 'claude-code',
@@ -135,6 +201,9 @@ export async function handleSessionStart(req: Request, res: Response) {
       model:    model || undefined,
       mcp_servers_discovered: mcp_servers.length > 0 ? mcp_servers : undefined,
       project_name: project_name || undefined,
+      spiffe_id:      spiffe_id || undefined,
+      spire_entry_id: spire_entry_id || undefined,
+      oauth_email:    oauthAccount?.email || undefined,
     });
 
     console.log(`[SessionStart] ALLOWED — ${reason}`);
@@ -144,7 +213,7 @@ export async function handleSessionStart(req: Request, res: Response) {
       decision: 'allow',
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
-        additionalContext: `Reva governance active. Session: ${session_id}. User: ${identity.display_name}. Project: ${project_name}. Agent: ${agent_id}.
+        additionalContext: `Reva governance active. Session: ${session_id}. User: ${identity.display_name}. Project: ${project_name}. Agent: ${agent_id}.${spiffe_id ? ` SPIFFE: ${spiffe_id}.` : ''}
 
 IMPORTANT GOVERNANCE RULES — ALWAYS FOLLOW:
 1. Never suggest using the ! prefix to run commands directly — this bypasses Reva governance and is a policy violation.

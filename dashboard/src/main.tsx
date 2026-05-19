@@ -26,6 +26,7 @@ interface Session {
   tool_count: number; locked: boolean; active_mcp_servers?: string[];
   agent_id?: string; os_type?: string; hostname?: string;
   model?: string; project_name?: string; mcp_servers_discovered?: string[];
+  spiffe_id?: string; oauth_email?: string;
 }
 
 interface ServerEntry {
@@ -162,6 +163,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       user: string; agent_id: string; os_type: string; hostname: string; model: string;
       sessions: Session[]; lastSeen: string; totalDecisions: number; denyCount: number;
       mcpServers: Set<string>; projects: Set<string>;
+      spiffe_id: string; oauth_email: string;
     }>();
     sessions.forEach(s => {
       const key = s.user_email;
@@ -169,6 +171,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
         user: key, agent_id: '', os_type: '', hostname: '', model: '',
         sessions: [], lastSeen: s.enrolled_at, totalDecisions: 0, denyCount: 0,
         mcpServers: new Set(), projects: new Set(),
+        spiffe_id: '', oauth_email: '',
       });
       const entry = map.get(key)!;
       entry.sessions.push(s);
@@ -179,6 +182,8 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       if (s.hostname) entry.hostname = s.hostname;
       if (s.model) entry.model = s.model;
       if (s.project_name) entry.projects.add(s.project_name);
+      if (s.spiffe_id) entry.spiffe_id = s.spiffe_id;
+      if (s.oauth_email) entry.oauth_email = s.oauth_email;
       (s.active_mcp_servers || []).forEach(m => entry.mcpServers.add(m));
       (s.mcp_servers_discovered || []).forEach(m => entry.mcpServers.add(m));
     });
@@ -231,7 +236,10 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                       <span style={{ fontSize: 11, color: isOnline ? T.green : T.gray400 }}>{isOnline ? 'Online' : 'Offline'}</span>
                     </div>
                     <div style={{ fontSize: 12, color: T.gray400, marginTop: 2 }}>
-                      {a.agent_id && <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 12 }}>{a.agent_id}</span>}
+                      {a.spiffe_id
+                        ? <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 12, color: T.green }}>🔐 SPIFFE</span>
+                        : a.agent_id && <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 12 }}>{a.agent_id}</span>
+                      }
                       {a.model ? a.model : 'plan default'} · {a.os_type || '—'} · {a.sessions.length} session{a.sessions.length !== 1 ? 's' : ''}
                     </div>
                   </div>
@@ -253,7 +261,12 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Agent Details</div>
-                        {detailRow('Agent ID', <span style={{ fontFamily: T.mono, fontSize: 12 }}>{a.agent_id || '—'}</span>)}
+                        {a.spiffe_id
+                          ? detailRow('Workload Identity', <span style={{ fontFamily: T.mono, fontSize: 11, color: T.green, wordBreak: 'break-all' }}>{a.spiffe_id}</span>)
+                          : detailRow('Agent ID', <span style={{ fontFamily: T.mono, fontSize: 12 }}>{a.agent_id || '—'}</span>)
+                        }
+                        {a.spiffe_id && detailRow('Identity Source', <Badge text="SPIRE" fg={T.green} bg={T.greenBg} />)}
+                        {a.oauth_email && detailRow('Authenticated As', a.oauth_email)}
                         {detailRow('Developer', a.user)}
                         {detailRow('Owner', a.user)}
                         {detailRow('Operating System', a.os_type || '—')}
