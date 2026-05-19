@@ -63,14 +63,22 @@ interface SessionStartInput {
   mcp_server_names?: string;  // comma-separated, from grep extraction
   // SPIRE identity + developer context — from ~/.claude.json
   claude_context?: {
-    account_uuid:     string;
-    display_name:     string;
-    email:            string;
-    org_uuid:         string;
-    user_id:          string;
+    account_uuid:      string;
+    display_name:      string;
+    email:             string;
+    org_uuid:          string;
+    user_id:           string;
     github_repo_paths: Record<string, string[]>;
-    git_email:        string;
-    git_name:         string;
+    git_email:         string;
+    git_name:          string;
+    // Git context
+    git_branch:        string;
+    git_remote_url:    string;
+    jira_ticket_id:    string;
+    // SSH detection
+    connection_type:   string;  // 'local' | 'ssh'
+    ssh_client_ip:     string;
+    remote_os:         string;
   };
   // Legacy field (backward compat)
   oauth_account?: {
@@ -166,7 +174,7 @@ export async function handleSessionStart(req: Request, res: Response) {
       probeAllServers(mcp_servers);
     }
 
-    console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} agent=${agent_id} spiffe=${spiffe_id || 'none'} mcp=[${mcp_servers.join(',')}]`);
+    console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} agent=${agent_id} spiffe=${spiffe_id || 'none'} conn=${(body.claude_context as any)?.connection_type || 'local'} branch=${(body.claude_context as any)?.git_branch || 'none'} ticket=${(body.claude_context as any)?.jira_ticket_id || 'none'} mcp=[${mcp_servers.join(',')}]`);
 
     // Resolve identity and access
     const { allowed, identity, reason } = resolveSession(os_user, cwd);
@@ -226,6 +234,12 @@ export async function handleSessionStart(req: Request, res: Response) {
       github_repo_paths:  (body.claude_context as any)?.github_repo_paths || undefined,
       git_email:          (body.claude_context as any)?.git_email || undefined,
       git_name:           (body.claude_context as any)?.git_name || undefined,
+      git_branch:         (body.claude_context as any)?.git_branch || undefined,
+      git_remote_url:     (body.claude_context as any)?.git_remote_url || undefined,
+      jira_ticket_id:     (body.claude_context as any)?.jira_ticket_id || undefined,
+      connection_type:    (body.claude_context as any)?.connection_type || 'local',
+      ssh_client_ip:      (body.claude_context as any)?.ssh_client_ip || undefined,
+      remote_os:          (body.claude_context as any)?.remote_os || undefined,
     });
 
     console.log(`[SessionStart] ALLOWED — ${reason}`);

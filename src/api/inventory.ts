@@ -140,6 +140,12 @@ router.get('/sessions', (_req, res) => {
     github_repo_paths: s.github_repo_paths || {},
     git_email:         s.git_email        || '',
     git_name:          s.git_name         || '',
+    git_branch:        s.git_branch       || '',
+    git_remote_url:    s.git_remote_url   || '',
+    jira_ticket_id:    s.jira_ticket_id   || '',
+    connection_type:   s.connection_type   || 'local',
+    ssh_client_ip:     s.ssh_client_ip    || '',
+    remote_os:         s.remote_os        || '',
   }));
   res.json({ sessions, total: sessions.length });
 });

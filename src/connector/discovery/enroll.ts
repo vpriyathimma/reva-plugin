@@ -27,6 +27,14 @@ export interface EnrolledSession {
   github_repo_paths?: Record<string, string[]>;
   git_email?:         string;
   git_name?:          string;
+  // Git context
+  git_branch?:        string;
+  git_remote_url?:    string;
+  jira_ticket_id?:    string;
+  // SSH connection
+  connection_type?:   string;  // 'local' | 'ssh'
+  ssh_client_ip?:     string;
+  remote_os?:         string;
 }
 
 // In-memory session store
@@ -64,7 +72,7 @@ export function enrollSession(
   session_id: string,
   user_email: string,
   tools: ClassifiedTool[],
-  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; user_id?: string; github_repo_paths?: Record<string, string[]>; git_email?: string; git_name?: string }
+  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; user_id?: string; github_repo_paths?: Record<string, string[]>; git_email?: string; git_name?: string; git_branch?: string; git_remote_url?: string; jira_ticket_id?: string; connection_type?: string; ssh_client_ip?: string; remote_os?: string }
 ): EnrolledSession {
   const uniqueServers = [...new Set(tools.map(t => t.server_name))];
 
@@ -92,6 +100,12 @@ export function enrollSession(
     github_repo_paths:     extra?.github_repo_paths,
     git_email:             extra?.git_email,
     git_name:              extra?.git_name,
+    git_branch:            extra?.git_branch,
+    git_remote_url:        extra?.git_remote_url,
+    jira_ticket_id:        extra?.jira_ticket_id,
+    connection_type:       extra?.connection_type,
+    ssh_client_ip:         extra?.ssh_client_ip,
+    remote_os:             extra?.remote_os,
   };
 
   sessionStore.set(session_id, session);

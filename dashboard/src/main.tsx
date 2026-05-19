@@ -31,6 +31,8 @@ interface Session {
   user_id?: string;
   github_repo_paths?: Record<string, string[]>;
   git_email?: string; git_name?: string;
+  git_branch?: string; git_remote_url?: string; jira_ticket_id?: string;
+  connection_type?: string; ssh_client_ip?: string; remote_os?: string;
 }
 
 interface ServerEntry {
@@ -171,6 +173,8 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       developer_name: string; account_uuid: string; org_uuid: string;
       user_id: string; git_email: string; git_name: string;
       github_repo_paths: Record<string, string[]>;
+      git_branch: string; git_remote_url: string; jira_ticket_id: string;
+      connection_type: string; ssh_client_ip: string; remote_os: string;
     }>();
     sessions.forEach(s => {
       const key = s.user_email;
@@ -182,6 +186,8 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
         developer_name: '', account_uuid: '', org_uuid: '',
         user_id: '', git_email: '', git_name: '',
         github_repo_paths: {},
+        git_branch: '', git_remote_url: '', jira_ticket_id: '',
+        connection_type: 'local', ssh_client_ip: '', remote_os: '',
       });
       const entry = map.get(key)!;
       entry.sessions.push(s);
@@ -201,6 +207,12 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       if (s.git_email) entry.git_email = s.git_email;
       if (s.git_name) entry.git_name = s.git_name;
       if (s.github_repo_paths && Object.keys(s.github_repo_paths).length > 0) entry.github_repo_paths = s.github_repo_paths;
+      if (s.git_branch) entry.git_branch = s.git_branch;
+      if (s.git_remote_url) entry.git_remote_url = s.git_remote_url;
+      if (s.jira_ticket_id) entry.jira_ticket_id = s.jira_ticket_id;
+      if (s.connection_type) entry.connection_type = s.connection_type;
+      if (s.ssh_client_ip) entry.ssh_client_ip = s.ssh_client_ip;
+      if (s.remote_os) entry.remote_os = s.remote_os;
       (s.active_mcp_servers || []).forEach(m => entry.mcpServers.add(m));
       (s.mcp_servers_discovered || []).forEach(m => entry.mcpServers.add(m));
     });
@@ -257,6 +269,10 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         ? <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 12, color: T.green }}>🔐 SPIFFE</span>
                         : a.agent_id && <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 12 }}>{a.agent_id}</span>
                       }
+                      {a.connection_type === 'ssh'
+                        ? <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 8, color: '#7c3aed', fontWeight: 600 }}>SSH</span>
+                        : null
+                      }
                       {a.model && a.model !== 'plan default' ? a.model : 'Claude Sonnet 4'} · {a.os_type || '—'} · {a.sessions.length} session{a.sessions.length !== 1 ? 's' : ''}
                     </div>
                   </div>
@@ -286,6 +302,10 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         {a.oauth_email && detailRow('Authenticated As', a.oauth_email)}
                         {detailRow('Developer', a.developer_name || a.user)}
                         {detailRow('Owner', a.user)}
+                        {detailRow('Environment', a.connection_type === 'ssh'
+                          ? <Badge text="Dev Server" fg="#7c3aed" bg="#ede9fe" />
+                          : <Badge text="Local" fg={T.accent} bg={T.gray100} />
+                        )}
                         {detailRow('Operating System', a.os_type || '—')}
                         {detailRow('Hostname', a.hostname || '—')}
                         {detailRow('Model', a.model && a.model !== 'plan default' ? a.model : 'Claude Sonnet 4')}
@@ -297,6 +317,14 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         {a.git_name && detailRow('Git Name', a.git_name)}
                         {a.git_email && detailRow('Git Email', a.git_email)}
                         {Object.keys(a.github_repo_paths).length > 0 && detailRow('Git Repos', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{Object.keys(a.github_repo_paths).join(', ')}</span>)}
+                        {a.git_branch && detailRow('Branch', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.git_branch}</span>)}
+                        {a.git_remote_url && detailRow('Remote URL', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.git_remote_url}</span>)}
+                        {a.jira_ticket_id && detailRow('Jira Ticket', <Badge text={a.jira_ticket_id} fg="#0052CC" bg="#DEEBFF" />)}
+                        {a.connection_type === 'ssh' && (<>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: '#7c3aed', marginBottom: 8, marginTop: 16, textTransform: 'uppercase', letterSpacing: '0.4px' }}>SSH Connection</div>
+                          {a.ssh_client_ip && detailRow('Client IP', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.ssh_client_ip}</span>)}
+                          {a.remote_os && detailRow('Remote OS', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.remote_os}</span>)}
+                        </>)}
                       </div>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Activity</div>
