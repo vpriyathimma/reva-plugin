@@ -136,9 +136,10 @@ router.get('/sessions', (_req, res) => {
     developer_name:    s.developer_name   || '',
     account_uuid:      s.account_uuid     || '',
     org_uuid:          s.org_uuid         || '',
-    billing_type:      s.billing_type     || '',
     user_id:           s.user_id          || '',
     github_repo_paths: s.github_repo_paths || {},
+    git_email:         s.git_email        || '',
+    git_name:          s.git_name         || '',
   }));
   res.json({ sessions, total: sessions.length });
 });

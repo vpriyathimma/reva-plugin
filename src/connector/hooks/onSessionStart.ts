@@ -67,9 +67,10 @@ interface SessionStartInput {
     display_name:     string;
     email:            string;
     org_uuid:         string;
-    billing_type:     string;
     user_id:          string;
     github_repo_paths: Record<string, string[]>;
+    git_email:        string;
+    git_name:         string;
   };
   // Legacy field (backward compat)
   oauth_account?: {
@@ -221,9 +222,10 @@ export async function handleSessionStart(req: Request, res: Response) {
       developer_name:     claudeCtx?.display_name || undefined,
       account_uuid:       claudeCtx?.account_uuid || undefined,
       org_uuid:           (body.claude_context as any)?.org_uuid || undefined,
-      billing_type:       (body.claude_context as any)?.billing_type || undefined,
       user_id:            (body.claude_context as any)?.user_id || undefined,
       github_repo_paths:  (body.claude_context as any)?.github_repo_paths || undefined,
+      git_email:          (body.claude_context as any)?.git_email || undefined,
+      git_name:           (body.claude_context as any)?.git_name || undefined,
     });
 
     console.log(`[SessionStart] ALLOWED — ${reason}`);

@@ -28,8 +28,9 @@ interface Session {
   model?: string; project_name?: string; mcp_servers_discovered?: string[];
   spiffe_id?: string; oauth_email?: string;
   developer_name?: string; account_uuid?: string; org_uuid?: string;
-  billing_type?: string; user_id?: string;
+  user_id?: string;
   github_repo_paths?: Record<string, string[]>;
+  git_email?: string; git_name?: string;
 }
 
 interface ServerEntry {
@@ -168,7 +169,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       mcpServers: Set<string>; projects: Set<string>;
       spiffe_id: string; oauth_email: string;
       developer_name: string; account_uuid: string; org_uuid: string;
-      billing_type: string; user_id: string;
+      user_id: string; git_email: string; git_name: string;
       github_repo_paths: Record<string, string[]>;
     }>();
     sessions.forEach(s => {
@@ -179,7 +180,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
         mcpServers: new Set(), projects: new Set(),
         spiffe_id: '', oauth_email: '',
         developer_name: '', account_uuid: '', org_uuid: '',
-        billing_type: '', user_id: '',
+        user_id: '', git_email: '', git_name: '',
         github_repo_paths: {},
       });
       const entry = map.get(key)!;
@@ -196,8 +197,9 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       if (s.developer_name) entry.developer_name = s.developer_name;
       if (s.account_uuid) entry.account_uuid = s.account_uuid;
       if (s.org_uuid) entry.org_uuid = s.org_uuid;
-      if (s.billing_type) entry.billing_type = s.billing_type;
       if (s.user_id) entry.user_id = s.user_id;
+      if (s.git_email) entry.git_email = s.git_email;
+      if (s.git_name) entry.git_name = s.git_name;
       if (s.github_repo_paths && Object.keys(s.github_repo_paths).length > 0) entry.github_repo_paths = s.github_repo_paths;
       (s.active_mcp_servers || []).forEach(m => entry.mcpServers.add(m));
       (s.mcp_servers_discovered || []).forEach(m => entry.mcpServers.add(m));
@@ -255,7 +257,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         ? <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 12, color: T.green }}>🔐 SPIFFE</span>
                         : a.agent_id && <span style={{ fontFamily: T.mono, fontSize: 11, marginRight: 12 }}>{a.agent_id}</span>
                       }
-                      {a.model ? a.model : 'plan default'} · {a.os_type || '—'} · {a.sessions.length} session{a.sessions.length !== 1 ? 's' : ''}
+                      {a.model && a.model !== 'plan default' ? a.model : 'Claude Sonnet 4'} · {a.os_type || '—'} · {a.sessions.length} session{a.sessions.length !== 1 ? 's' : ''}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -286,19 +288,15 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         {detailRow('Owner', a.user)}
                         {detailRow('Operating System', a.os_type || '—')}
                         {detailRow('Hostname', a.hostname || '—')}
-                        {detailRow('Model', a.model || 'plan default')}
+                        {detailRow('Model', a.model && a.model !== 'plan default' ? a.model : 'Claude Sonnet 4')}
                         {detailRow('Last Active', timeAgo(a.lastSeen))}
                         {detailRow('Status', <span style={{ color: isOnline ? T.green : T.gray400, fontWeight: 600 }}>{isOnline ? 'Online' : 'Offline'}</span>)}
-                        {a.account_uuid && detailRow('Account UUID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.account_uuid}</span>)}
-                        {a.org_uuid && detailRow('Org UUID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.org_uuid}</span>)}
-                        {a.user_id && detailRow('User ID', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.user_id}</span>)}
-                        {a.billing_type && detailRow('Billing Type', a.billing_type)}
+                        {a.account_uuid && detailRow('Anthropic Account ID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.account_uuid}</span>)}
+                        {a.org_uuid && detailRow('Anthropic Org UUID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.org_uuid}</span>)}
+                        {a.user_id && detailRow('Anthropic User ID', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.user_id}</span>)}
+                        {a.git_name && detailRow('Git Name', a.git_name)}
+                        {a.git_email && detailRow('Git Email', a.git_email)}
                         {Object.keys(a.github_repo_paths).length > 0 && detailRow('Git Repos', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{Object.keys(a.github_repo_paths).join(', ')}</span>)}
-                        {detailRow('Operating System', a.os_type || '—')}
-                        {detailRow('Hostname', a.hostname || '—')}
-                        {detailRow('Model', a.model || 'plan default')}
-                        {detailRow('Last Active', timeAgo(a.lastSeen))}
-                        {detailRow('Status', <span style={{ color: isOnline ? T.green : T.gray400, fontWeight: 600 }}>{isOnline ? 'Online' : 'Offline'}</span>)}
                       </div>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Activity</div>

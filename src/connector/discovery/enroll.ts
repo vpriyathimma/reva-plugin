@@ -23,9 +23,10 @@ export interface EnrolledSession {
   developer_name?:    string;
   account_uuid?:      string;
   org_uuid?:          string;
-  billing_type?:      string;
   user_id?:           string;
   github_repo_paths?: Record<string, string[]>;
+  git_email?:         string;
+  git_name?:          string;
 }
 
 // In-memory session store
@@ -63,7 +64,7 @@ export function enrollSession(
   session_id: string,
   user_email: string,
   tools: ClassifiedTool[],
-  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; billing_type?: string; user_id?: string; github_repo_paths?: Record<string, string[]> }
+  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; user_id?: string; github_repo_paths?: Record<string, string[]>; git_email?: string; git_name?: string }
 ): EnrolledSession {
   const uniqueServers = [...new Set(tools.map(t => t.server_name))];
 
@@ -87,9 +88,10 @@ export function enrollSession(
     developer_name:        extra?.developer_name,
     account_uuid:          extra?.account_uuid,
     org_uuid:              extra?.org_uuid,
-    billing_type:          extra?.billing_type,
     user_id:               extra?.user_id,
     github_repo_paths:     extra?.github_repo_paths,
+    git_email:             extra?.git_email,
+    git_name:              extra?.git_name,
   };
 
   sessionStore.set(session_id, session);
