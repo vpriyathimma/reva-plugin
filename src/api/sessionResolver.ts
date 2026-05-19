@@ -1,12 +1,13 @@
-// Session Resolver — maps OS user + project_name to access decision
-// Admin defines the access matrix here
-// No email mapping — only OS user and project name
+// Session Resolver — resolves developer identity from OS user + oauthEmail
+// No hardcoded access gating — Cedar PDP makes all access decisions
+// This module only resolves WHO the developer is, not WHETHER they're allowed
 
 export interface SessionIdentity {
   os_user:      string;
   project_name: string;
   display_name: string;
   allowed_projects: string[];
+  resolved_via?: string;  // 'os_user' | 'oauth_email'
 }
 
 // HITL email map — OS username → Okta email for Verify push
@@ -20,8 +21,6 @@ export function resolveHITLEmail(osUser: string): string {
 }
 
 // Developer profile — maps OS username → Cedar Developer entity attributes
-// Used to populate principal.properties and principal.parents in Cedar payloads
-// so policies can evaluate `principal in Department::"X"` and `principal.user_role`
 export interface DeveloperProfile {
   user_role:       string;
   employment_type: string;
@@ -43,57 +42,30 @@ const DEVELOPER_PROFILE: Record<string, DeveloperProfile> = {
 
 export function resolveDeveloperProfile(osUser: string): DeveloperProfile {
   return DEVELOPER_PROFILE[osUser] || {
-    user_role:       'unknown',
+    user_role:       'developer',
     employment_type: 'unknown',
     department:      'unknown',
   };
 }
 
-// Access matrix — admin controlled
-// os_user → allowed project names
-const ACCESS_MATRIX: Record<string, { display_name: string; allowed_projects: string[] }> = {
-  saisrungaram: {
-    display_name:     'Sai (Admin)',
-    allowed_projects: ['claude-demo-project', 'claude-stage-project', 'reva-cowork-plugin'],
-  },
-  mike: {
-    display_name:     'Mike',
-    allowed_projects: ['claude-stage-project'],
-  },
-  kevin: {
-    display_name:     'Kevin',
-    allowed_projects: [],
-  },
-};
-
-export function resolveSession(os_user: string, cwd: string): {
+// Resolve session identity — always allows, Cedar makes access decisions
+export function resolveSession(os_user: string, cwd: string, oauthEmail?: string): {
   allowed: boolean;
   identity: SessionIdentity;
   reason: string;
 } {
   const project_name = cwd.split('/').pop() || '';
-  const entry        = ACCESS_MATRIX[os_user];
-
-  if (!entry) {
-    return {
-      allowed:  false,
-      identity: { os_user, project_name, display_name: os_user, allowed_projects: [] },
-      reason:   `OS user '${os_user}' is not registered in Reva access matrix`,
-    };
-  }
-
-  const allowed = entry.allowed_projects.includes(project_name);
+  const display_name = oauthEmail || os_user;
 
   return {
-    allowed,
+    allowed: true,
     identity: {
       os_user,
       project_name,
-      display_name:     entry.display_name,
-      allowed_projects: entry.allowed_projects,
+      display_name,
+      allowed_projects: [],
+      resolved_via: oauthEmail ? 'oauth_email' : 'os_user',
     },
-    reason: allowed
-      ? `Access granted: ${entry.display_name} is allowed to access ${project_name}`
-      : `Access denied: ${entry.display_name} is not allowed to access ${project_name}. Allowed projects: [${entry.allowed_projects.join(', ') || 'none'}]`,
+    reason: `Session registered: ${display_name} (os_user: ${os_user}) in ${project_name || 'home directory'}`,
   };
 }
