@@ -131,8 +131,14 @@ router.get('/sessions', (_req, res) => {
     model:          s.model        || '',
     project_name:   s.project_name || '',
     mcp_servers_discovered: s.mcp_servers_discovered || [],
-    spiffe_id:      s.spiffe_id    || '',
-    oauth_email:    s.oauth_email  || '',
+    spiffe_id:         s.spiffe_id        || '',
+    oauth_email:       s.oauth_email      || '',
+    developer_name:    s.developer_name   || '',
+    account_uuid:      s.account_uuid     || '',
+    org_uuid:          s.org_uuid         || '',
+    billing_type:      s.billing_type     || '',
+    user_id:           s.user_id          || '',
+    github_repo_paths: s.github_repo_paths || {},
   }));
   res.json({ sessions, total: sessions.length });
 });

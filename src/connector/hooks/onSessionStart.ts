@@ -61,7 +61,17 @@ interface SessionStartInput {
   model?:            string;
   mcp_config?:       any;
   mcp_server_names?: string;  // comma-separated, from grep extraction
-  // SPIRE identity — from ~/.claude.json oauthAccount
+  // SPIRE identity + developer context — from ~/.claude.json
+  claude_context?: {
+    account_uuid:     string;
+    display_name:     string;
+    email:            string;
+    org_uuid:         string;
+    billing_type:     string;
+    user_id:          string;
+    github_repo_paths: Record<string, string[]>;
+  };
+  // Legacy field (backward compat)
   oauth_account?: {
     account_uuid: string;
     display_name: string;
@@ -133,10 +143,14 @@ export async function handleSessionStart(req: Request, res: Response) {
     // ── SPIRE registration — get cryptographic workload identity ──
     let spiffe_id: string | undefined;
     let spire_entry_id: string | undefined;
-    const oauthAccount = body.oauth_account;
+    const claudeCtx = body.claude_context || body.oauth_account;
 
-    if (oauthAccount?.account_uuid) {
-      const spireResult = await registerWithSPIRE(oauthAccount);
+    if (claudeCtx?.account_uuid) {
+      const spireResult = await registerWithSPIRE({
+        account_uuid: claudeCtx.account_uuid,
+        display_name: claudeCtx.display_name || '',
+        email:        claudeCtx.email || '',
+      });
       if (spireResult) {
         spiffe_id      = spireResult.spiffe_id;
         spire_entry_id = spireResult.entry_id;
@@ -200,10 +214,16 @@ export async function handleSessionStart(req: Request, res: Response) {
       hostname: hostname || undefined,
       model:    model || undefined,
       mcp_servers_discovered: mcp_servers.length > 0 ? mcp_servers : undefined,
-      project_name: project_name || undefined,
-      spiffe_id:      spiffe_id || undefined,
-      spire_entry_id: spire_entry_id || undefined,
-      oauth_email:    oauthAccount?.email || undefined,
+      project_name:       project_name || undefined,
+      spiffe_id:          spiffe_id || undefined,
+      spire_entry_id:     spire_entry_id || undefined,
+      oauth_email:        claudeCtx?.email || undefined,
+      developer_name:     claudeCtx?.display_name || undefined,
+      account_uuid:       claudeCtx?.account_uuid || undefined,
+      org_uuid:           (body.claude_context as any)?.org_uuid || undefined,
+      billing_type:       (body.claude_context as any)?.billing_type || undefined,
+      user_id:            (body.claude_context as any)?.user_id || undefined,
+      github_repo_paths:  (body.claude_context as any)?.github_repo_paths || undefined,
     });
 
     console.log(`[SessionStart] ALLOWED — ${reason}`);

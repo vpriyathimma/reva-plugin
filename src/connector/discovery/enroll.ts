@@ -19,6 +19,13 @@ export interface EnrolledSession {
   spiffe_id?:      string;
   spire_entry_id?: string;
   oauth_email?:    string;
+  // Developer context from ~/.claude.json
+  developer_name?:    string;
+  account_uuid?:      string;
+  org_uuid?:          string;
+  billing_type?:      string;
+  user_id?:           string;
+  github_repo_paths?: Record<string, string[]>;
 }
 
 // In-memory session store
@@ -56,7 +63,7 @@ export function enrollSession(
   session_id: string,
   user_email: string,
   tools: ClassifiedTool[],
-  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string }
+  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; billing_type?: string; user_id?: string; github_repo_paths?: Record<string, string[]> }
 ): EnrolledSession {
   const uniqueServers = [...new Set(tools.map(t => t.server_name))];
 
@@ -77,6 +84,12 @@ export function enrollSession(
     spiffe_id:             extra?.spiffe_id,
     spire_entry_id:        extra?.spire_entry_id,
     oauth_email:           extra?.oauth_email,
+    developer_name:        extra?.developer_name,
+    account_uuid:          extra?.account_uuid,
+    org_uuid:              extra?.org_uuid,
+    billing_type:          extra?.billing_type,
+    user_id:               extra?.user_id,
+    github_repo_paths:     extra?.github_repo_paths,
   };
 
   sessionStore.set(session_id, session);

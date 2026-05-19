@@ -27,6 +27,9 @@ interface Session {
   agent_id?: string; os_type?: string; hostname?: string;
   model?: string; project_name?: string; mcp_servers_discovered?: string[];
   spiffe_id?: string; oauth_email?: string;
+  developer_name?: string; account_uuid?: string; org_uuid?: string;
+  billing_type?: string; user_id?: string;
+  github_repo_paths?: Record<string, string[]>;
 }
 
 interface ServerEntry {
@@ -164,6 +167,9 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       sessions: Session[]; lastSeen: string; totalDecisions: number; denyCount: number;
       mcpServers: Set<string>; projects: Set<string>;
       spiffe_id: string; oauth_email: string;
+      developer_name: string; account_uuid: string; org_uuid: string;
+      billing_type: string; user_id: string;
+      github_repo_paths: Record<string, string[]>;
     }>();
     sessions.forEach(s => {
       const key = s.user_email;
@@ -172,6 +178,9 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
         sessions: [], lastSeen: s.enrolled_at, totalDecisions: 0, denyCount: 0,
         mcpServers: new Set(), projects: new Set(),
         spiffe_id: '', oauth_email: '',
+        developer_name: '', account_uuid: '', org_uuid: '',
+        billing_type: '', user_id: '',
+        github_repo_paths: {},
       });
       const entry = map.get(key)!;
       entry.sessions.push(s);
@@ -184,6 +193,12 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       if (s.project_name) entry.projects.add(s.project_name);
       if (s.spiffe_id) entry.spiffe_id = s.spiffe_id;
       if (s.oauth_email) entry.oauth_email = s.oauth_email;
+      if (s.developer_name) entry.developer_name = s.developer_name;
+      if (s.account_uuid) entry.account_uuid = s.account_uuid;
+      if (s.org_uuid) entry.org_uuid = s.org_uuid;
+      if (s.billing_type) entry.billing_type = s.billing_type;
+      if (s.user_id) entry.user_id = s.user_id;
+      if (s.github_repo_paths && Object.keys(s.github_repo_paths).length > 0) entry.github_repo_paths = s.github_repo_paths;
       (s.active_mcp_servers || []).forEach(m => entry.mcpServers.add(m));
       (s.mcp_servers_discovered || []).forEach(m => entry.mcpServers.add(m));
     });
@@ -267,8 +282,18 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         }
                         {a.spiffe_id && detailRow('Identity Source', <Badge text="SPIRE" fg={T.green} bg={T.greenBg} />)}
                         {a.oauth_email && detailRow('Authenticated As', a.oauth_email)}
-                        {detailRow('Developer', a.user)}
+                        {detailRow('Developer', a.developer_name || a.user)}
                         {detailRow('Owner', a.user)}
+                        {detailRow('Operating System', a.os_type || '—')}
+                        {detailRow('Hostname', a.hostname || '—')}
+                        {detailRow('Model', a.model || 'plan default')}
+                        {detailRow('Last Active', timeAgo(a.lastSeen))}
+                        {detailRow('Status', <span style={{ color: isOnline ? T.green : T.gray400, fontWeight: 600 }}>{isOnline ? 'Online' : 'Offline'}</span>)}
+                        {a.account_uuid && detailRow('Account UUID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.account_uuid}</span>)}
+                        {a.org_uuid && detailRow('Org UUID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.org_uuid}</span>)}
+                        {a.user_id && detailRow('User ID', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.user_id}</span>)}
+                        {a.billing_type && detailRow('Billing Type', a.billing_type)}
+                        {Object.keys(a.github_repo_paths).length > 0 && detailRow('Git Repos', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{Object.keys(a.github_repo_paths).join(', ')}</span>)}
                         {detailRow('Operating System', a.os_type || '—')}
                         {detailRow('Hostname', a.hostname || '—')}
                         {detailRow('Model', a.model || 'plan default')}
