@@ -245,17 +245,18 @@ export async function handleSessionStart(req: Request, res: Response) {
     });
 
     // ── PIP enrichment — query Jira + GitHub for session context ──
+    // SYNCHRONOUS — wait for PIP before responding, so first tool call has context
     const ticketId  = (body.claude_context as any)?.jira_ticket_id || '';
     const remoteUrl = (body.claude_context as any)?.git_remote_url || '';
     const branch    = (body.claude_context as any)?.git_branch || '';
-    // Fire-and-forget: don't block session start on PIP queries
-    // Key by os_user (consistent across SessionStart + PreToolUse hooks)
-    enrichPIP(os_user, ticketId, remoteUrl, branch, {
-      oauth_email:     claudeCtx?.email || undefined,
-      connection_type: (body.claude_context as any)?.connection_type || 'local',
-    }).catch(err =>
-      console.warn(`[PIP] Enrichment failed (non-blocking): ${err.message}`)
-    );
+    try {
+      await enrichPIP(os_user, ticketId, remoteUrl, branch, {
+        oauth_email:     claudeCtx?.email || undefined,
+        connection_type: (body.claude_context as any)?.connection_type || 'local',
+      });
+    } catch (err: any) {
+      console.warn(`[PIP] Enrichment failed (continuing without PIP): ${err.message}`);
+    }
 
     console.log(`[SessionStart] ALLOWED — ${reason}`);
     console.log(`[SessionStart] MCP servers: ${mcp_servers.join(', ') || 'none'}`);

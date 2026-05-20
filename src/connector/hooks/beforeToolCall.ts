@@ -251,28 +251,8 @@ export async function handleToolCall(req: Request, res: Response) {
     let reason  = 'Tool call permitted';
 
     if (cedarResult.decision === 'deny') {
-      // Extract command_risk from payload context for bash commands
-      const commandRisk    = (cedarPayload as any)?.context?.command_risk || 'safe';
-      const fileZone       = (cedarPayload as any)?.context?.file_zone    || 'other';
-      // Read agent_type from Cedar payload context — more reliable than derivedAgentType for parallel requests
-      const payloadAgentType = (cedarPayload as any)?.context?.agent_type || derivedAgentType;
-
-      // Destructive commands, secrets, and subagent src writes → always hard deny, never HITL
-      const isHardDeny =
-        commandRisk      === 'destructive' ||
-        fileZone         === 'secrets'     ||
-        (payloadAgentType === 'subagent' && fileZone === 'src');
-
-      if (isHardDeny) {
-        effect = 'Deny';
-        reason = 'Blocked by Reva Governance Policy';
-      } else if (!hitlAcknowledged) {
-        effect = 'HITL';
-        reason = 'HITL required — approve in Okta Verify to proceed';
-      } else {
-        effect = 'Deny';
-        reason = 'Blocked by Reva Governance Policy';
-      }
+      effect = 'Deny';
+      reason = 'Blocked by Reva Governance Policy — no matching authorization';
     }
 
     logDecision({
@@ -298,8 +278,9 @@ export async function handleToolCall(req: Request, res: Response) {
       cedar_decision_id: cedarResult.decision_id,
     });
 
-    // HITL: trigger Okta Verify push — SYNCHRONOUS — hold response until approved/denied
-    if (effect === 'HITL' && !hitlInFlight.get(hitlKey)) {
+    // HITL: currently disabled — Cedar deny = hard deny, no HITL trigger
+    // Kept for future use when specific Cedar policies signal HITL requirement
+    if ((effect as string) === 'HITL' && !hitlInFlight.get(hitlKey)) {
       hitlInFlight.set(hitlKey, true);
       try {
         console.log(`[HITL] Triggering synchronous push for ${user_email} → ${tool_name}`);
@@ -388,7 +369,7 @@ export async function handleToolCall(req: Request, res: Response) {
       });
     }
 
-    if (effect === 'HITL') {
+    if ((effect as string) === 'HITL') {
       return res.json({
         hookSpecificOutput: {
           hookEventName:            'PreToolUse',
