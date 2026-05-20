@@ -359,6 +359,9 @@ function buildDeveloperPrincipal(osUser: string, agentType: string) {
 function flattenPIPContext(pipCtx?: any): Record<string, any> {
   if (!pipCtx) return {};
   const flat: Record<string, any> = {};
+  // Identity
+  if (pipCtx.oauth_email) flat.oauth_email = pipCtx.oauth_email;
+  if (pipCtx.connection_type) flat.connection_type = pipCtx.connection_type;
   // Jira
   if (pipCtx.jira) {
     flat.jira_ticket_exists   = pipCtx.jira.jira_ticket_exists ?? false;

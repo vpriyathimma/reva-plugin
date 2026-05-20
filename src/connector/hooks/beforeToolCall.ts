@@ -100,6 +100,13 @@ export async function handleToolCall(req: Request, res: Response) {
     const enrolledSession   = sessionStore.get(session_id);
     const user_email = osUserFromHeader || osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
 
+    // Derive project name dynamically — NEVER hardcode
+    const filePath = req.body?.tool_input?.file_path || req.body?.tool_input?.path || '';
+    const derivedProject = projectFromHeader
+      ? projectFromHeader.split('/').pop() || 'unknown'
+      : enrolledSession?.project_name
+        || (filePath.includes('/') ? (filePath.split('/')[3] || 'unknown') : 'unknown');
+
     const sessionIntent   = sessionIntentStore.get(session_id);
     const promptIntent    = sessionIntent?.intent         || 'unknown';
     const priorIntents    = sessionIntent?.prior_intents  || '';
@@ -180,8 +187,8 @@ export async function handleToolCall(req: Request, res: Response) {
     // Resolve SPIFFE ID for this session — developer only, not spawned agents
     const spiffeId = derivedAgentType !== 'subagent' ? spiffeIdStore.get(session_id) : undefined;
 
-    // Resolve PIP context (Jira + GitHub) — cached from SessionStart
-    const pipCtx = getPIPContext(session_id);
+    // Resolve PIP context (Jira + GitHub) — cached from SessionStart, keyed by os_user
+    const pipCtx = getPIPContext(user_email);
 
     const cedarPayload = (client_source === 'claude-code' && isMCPTool)
       ? buildMCPToolPayload({
@@ -201,7 +208,7 @@ export async function handleToolCall(req: Request, res: Response) {
       : client_source === 'claude-code'
       ? buildFileOperationPayload({
           osUser:          user_email,
-          projectName:     projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : server_name || 'claude-demo-project',
+          projectName:     projectFromHeader ? projectFromHeader.split('/').pop() || derivedProject : server_name || derivedProject,
           toolName:        tool_name,
           filePath:        req.body?.tool_input?.file_path  // Edit, Write, MultiEdit
                             || req.body?.tool_input?.path        // Read
@@ -319,10 +326,22 @@ export async function handleToolCall(req: Request, res: Response) {
 
           // Rebuild payload with hitlAcknowledged: true and re-evaluate
           const approvedPayload = (client_source === 'claude-code' && isMCPTool)
-            ? buildMCPToolPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'unknown' : 'unknown', toolName: mcpTool, serverName: mcpServer, agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId, pipCtx })
-            : buildFileOperationPayload({ osUser: user_email, projectName: projectFromHeader ? projectFromHeader.split('/').pop() || 'claude-demo-project' : 'claude-demo-project', toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId, pipCtx });
+            ? buildMCPToolPayload({ osUser: user_email, projectName: derivedProject, toolName: mcpTool, serverName: mcpServer, agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId, pipCtx })
+            : buildFileOperationPayload({ osUser: user_email, projectName: derivedProject, toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId, pipCtx });
 
           const approvedCedar = await evaluateCedar(approvedPayload);
+
+          // CRITICAL: If Cedar STILL denies after HITL approval, enforce the deny
+          if (approvedCedar.decision === 'deny') {
+            console.warn(`[HITL] Cedar re-eval STILL denied after approval — enforcing deny for ${tool_name}`);
+            logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Deny', reason: 'HITL approved but Cedar denied — no matching permit policy', intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: approvedCedar.decision, cedar_policy_name: approvedCedar.policy_name, cedar_latency_ms: approvedCedar.latency_ms });
+            hitlInFlight.delete(hitlKey);
+            return res.json({
+              hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
+                permissionDecisionReason: 'Blocked by Reva Governance Policy — no matching authorization' },
+              reva: { effect: 'Deny', reason: 'Cedar denied after HITL approval', cedar: approvedCedar },
+            });
+          }
 
           logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Permit', reason: 'HITL approved — Cedar re-evaluated and permitted', intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: approvedCedar.decision, cedar_policy_name: approvedCedar.policy_name, cedar_latency_ms: approvedCedar.latency_ms });
 

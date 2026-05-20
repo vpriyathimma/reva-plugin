@@ -249,7 +249,11 @@ export async function handleSessionStart(req: Request, res: Response) {
     const remoteUrl = (body.claude_context as any)?.git_remote_url || '';
     const branch    = (body.claude_context as any)?.git_branch || '';
     // Fire-and-forget: don't block session start on PIP queries
-    enrichPIP(session_id, ticketId, remoteUrl, branch).catch(err =>
+    // Key by os_user (consistent across SessionStart + PreToolUse hooks)
+    enrichPIP(os_user, ticketId, remoteUrl, branch, {
+      oauth_email:     claudeCtx?.email || undefined,
+      connection_type: (body.claude_context as any)?.connection_type || 'local',
+    }).catch(err =>
       console.warn(`[PIP] Enrichment failed (non-blocking): ${err.message}`)
     );
 

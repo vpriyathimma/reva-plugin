@@ -29,17 +29,20 @@ export interface GitHubContext {
 export interface PIPContext {
   jira:   JiraContext;
   github: GitHubContext;
+  // Identity fields (stored alongside PIP for consistent lookup)
+  oauth_email?:     string;
+  connection_type?: string;
 }
 
-// ── Store PIP results per session ──
+// ── Store PIP results per developer (os_user key — consistent across hooks) ──
 const pipStore = new Map<string, PIPContext>();
 
-export function getPIPContext(sessionId: string): PIPContext | undefined {
-  return pipStore.get(sessionId);
+export function getPIPContext(key: string): PIPContext | undefined {
+  return pipStore.get(key);
 }
 
-export function setPIPContext(sessionId: string, ctx: PIPContext): void {
-  pipStore.set(sessionId, ctx);
+export function setPIPContext(key: string, ctx: PIPContext): void {
+  pipStore.set(key, ctx);
 }
 
 // ── Jira Query ──
@@ -208,19 +211,25 @@ export async function queryGitHub(remoteUrl: string, branch: string): Promise<Gi
 
 // ── Combined enrichment ──
 export async function enrichSession(
-  sessionId: string,
+  osUser: string,
   ticketId: string,
   remoteUrl: string,
-  branch: string
+  branch: string,
+  identityFields?: { oauth_email?: string; connection_type?: string }
 ): Promise<PIPContext> {
   const [jira, github] = await Promise.all([
     queryJira(ticketId),
     queryGitHub(remoteUrl, branch),
   ]);
 
-  const ctx: PIPContext = { jira, github };
-  setPIPContext(sessionId, ctx);
+  const ctx: PIPContext = {
+    jira,
+    github,
+    oauth_email:     identityFields?.oauth_email,
+    connection_type: identityFields?.connection_type,
+  };
+  setPIPContext(osUser, ctx);
 
-  console.log(`[PIP] Session ${sessionId} enriched: jira=${jira.jira_ticket_exists ? jira.jira_ticket_id : 'none'}, github=${github.github_repo || 'none'}, branch_protected=${github.github_branch_protected}`);
+  console.log(`[PIP] Developer ${osUser} enriched: jira=${jira.jira_ticket_exists ? jira.jira_ticket_id : 'none'}, github=${github.github_repo || 'none'}, branch_protected=${github.github_branch_protected}`);
   return ctx;
 }
