@@ -253,6 +253,8 @@ export async function handleSessionStart(req: Request, res: Response) {
       await enrichPIP(os_user, ticketId, remoteUrl, branch, {
         oauth_email:     claudeCtx?.email || undefined,
         connection_type: (body.claude_context as any)?.connection_type || 'local',
+        git_email:       (body.claude_context as any)?.git_email || undefined,
+        git_name:        (body.claude_context as any)?.git_name || undefined,
       });
     } catch (err: any) {
       console.warn(`[PIP] Enrichment failed (continuing without PIP): ${err.message}`);

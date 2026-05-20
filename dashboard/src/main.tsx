@@ -317,8 +317,8 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         {a.git_name && detailRow('Git Name', a.git_name)}
                         {a.git_email && detailRow('Git Email', a.git_email)}
                         {Object.keys(a.github_repo_paths).length > 0 && detailRow('Git Repos', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{Object.keys(a.github_repo_paths).join(', ')}</span>)}
-                        {a.git_branch && detailRow('Branch', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.git_branch}</span>)}
-                        {a.git_remote_url && detailRow('Remote URL', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.git_remote_url}</span>)}
+                        {a.git_branch && detailRow('Last Accessed Branch', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.git_branch}</span>)}
+                        {a.git_remote_url && detailRow('Last Accessed Repo URL', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.git_remote_url}</span>)}
                         {a.jira_ticket_id && detailRow('Jira Ticket', <Badge text={a.jira_ticket_id} fg="#0052CC" bg="#DEEBFF" />)}
                         {a.connection_type === 'ssh' && (<>
                           <div style={{ fontSize: 12, fontWeight: 600, color: '#7c3aed', marginBottom: 8, marginTop: 16, textTransform: 'uppercase', letterSpacing: '0.4px' }}>SSH Connection</div>
@@ -329,8 +329,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600, color: T.accent, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Activity</div>
                         {detailRow('Sessions', String(a.sessions.length))}
-                        {detailRow('Projects', a.projects.size > 0 ? Array.from(a.projects).join(', ') : '—')}
-                        {detailRow('Total Decisions', String(a.totalDecisions))}
+                        {detailRow('Folders Accessed', a.projects.size > 0 ? Array.from(a.projects).join(', ') : '—')}
                         {detailRow('Deny Rate', <span style={{ fontWeight: 600, color: denyRate > 20 ? T.red : T.green }}>{denyRate}%</span>)}
                         {detailRow('MCP Servers', a.mcpServers.size > 0
                           ? <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{Array.from(a.mcpServers).map(s => <span key={s} style={{ fontFamily: T.mono, fontSize: 11, background: T.gray100, padding: '1px 8px', borderRadius: 4 }}>{s}</span>)}</div>

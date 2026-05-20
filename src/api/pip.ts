@@ -32,6 +32,8 @@ export interface PIPContext {
   // Identity fields (stored alongside PIP for consistent lookup)
   oauth_email?:     string;
   connection_type?: string;
+  git_email?:       string;
+  git_name?:        string;
 }
 
 // ── Store PIP results per developer (os_user key — consistent across hooks) ──
@@ -232,7 +234,7 @@ export async function enrichSession(
   ticketId: string,
   remoteUrl: string,
   branch: string,
-  identityFields?: { oauth_email?: string; connection_type?: string }
+  identityFields?: { oauth_email?: string; connection_type?: string; git_email?: string; git_name?: string }
 ): Promise<PIPContext> {
   const [jira, github] = await Promise.all([
     queryJira(ticketId),
@@ -244,6 +246,8 @@ export async function enrichSession(
     github,
     oauth_email:     identityFields?.oauth_email,
     connection_type: identityFields?.connection_type,
+    git_email:       identityFields?.git_email,
+    git_name:        identityFields?.git_name,
   };
   setPIPContext(osUser, ctx);
 

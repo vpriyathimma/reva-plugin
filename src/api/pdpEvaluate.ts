@@ -362,6 +362,8 @@ function flattenPIPContext(pipCtx?: any): Record<string, any> {
   // Identity
   if (pipCtx.oauth_email) flat.oauth_email = pipCtx.oauth_email;
   if (pipCtx.connection_type) flat.connection_type = pipCtx.connection_type;
+  if (pipCtx.git_email) flat.git_email = pipCtx.git_email;
+  if (pipCtx.git_name) flat.git_name = pipCtx.git_name;
   // Jira
   if (pipCtx.jira) {
     flat.jira_ticket_exists   = pipCtx.jira.jira_ticket_exists ?? false;
