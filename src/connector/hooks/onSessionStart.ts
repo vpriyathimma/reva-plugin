@@ -10,6 +10,7 @@ import { resolveSession }    from '../../api/sessionResolver';
 import { enrollSession }     from '../discovery/enroll';
 import { getOrCreateSessionTrace } from '../../api/pdpEvaluate';
 import { probeAllServers }   from '../../api/mcpProbe';
+import { enrichSession as enrichPIP } from '../../api/pip';
 
 const SPIRE_API_URL = process.env.SPIRE_API_URL || 'http://3.233.113.248:8090';
 
@@ -176,8 +177,9 @@ export async function handleSessionStart(req: Request, res: Response) {
 
     console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} agent=${agent_id} spiffe=${spiffe_id || 'none'} conn=${(body.claude_context as any)?.connection_type || 'local'} branch=${(body.claude_context as any)?.git_branch || 'none'} ticket=${(body.claude_context as any)?.jira_ticket_id || 'none'} mcp=[${mcp_servers.join(',')}]`);
 
-    // Resolve identity and access
-    const { allowed, identity, reason } = resolveSession(os_user, cwd);
+    // Resolve identity and access (oauthEmail enables SSH fallback)
+    const oauthEmail = claudeCtx?.email || undefined;
+    const { allowed, identity, reason } = resolveSession(os_user, cwd, oauthEmail);
 
     if (!allowed) {
       console.warn(`[SessionStart] DENIED — ${reason}`);
@@ -241,6 +243,15 @@ export async function handleSessionStart(req: Request, res: Response) {
       ssh_client_ip:      (body.claude_context as any)?.ssh_client_ip || undefined,
       remote_os:          (body.claude_context as any)?.remote_os || undefined,
     });
+
+    // ── PIP enrichment — query Jira + GitHub for session context ──
+    const ticketId  = (body.claude_context as any)?.jira_ticket_id || '';
+    const remoteUrl = (body.claude_context as any)?.git_remote_url || '';
+    const branch    = (body.claude_context as any)?.git_branch || '';
+    // Fire-and-forget: don't block session start on PIP queries
+    enrichPIP(session_id, ticketId, remoteUrl, branch).catch(err =>
+      console.warn(`[PIP] Enrichment failed (non-blocking): ${err.message}`)
+    );
 
     console.log(`[SessionStart] ALLOWED — ${reason}`);
     console.log(`[SessionStart] MCP servers: ${mcp_servers.join(', ') || 'none'}`);

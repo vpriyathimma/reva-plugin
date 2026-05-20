@@ -355,6 +355,31 @@ function buildDeveloperPrincipal(osUser: string, agentType: string) {
   };
 }
 
+// ── PIP context flattener — extracts Jira + GitHub fields for Cedar context ──
+function flattenPIPContext(pipCtx?: any): Record<string, any> {
+  if (!pipCtx) return {};
+  const flat: Record<string, any> = {};
+  // Jira
+  if (pipCtx.jira) {
+    flat.jira_ticket_exists   = pipCtx.jira.jira_ticket_exists ?? false;
+    flat.jira_ticket_id       = pipCtx.jira.jira_ticket_id ?? '';
+    flat.jira_assignee        = pipCtx.jira.jira_assignee ?? '';
+    flat.jira_assignee_email  = pipCtx.jira.jira_assignee_email ?? '';
+    flat.jira_status          = pipCtx.jira.jira_status ?? '';
+    flat.jira_component       = pipCtx.jira.jira_component ?? '';
+    flat.jira_sprint          = pipCtx.jira.jira_sprint ?? '';
+    flat.jira_appsec_review   = pipCtx.jira.jira_appsec_review ?? false;
+  }
+  // GitHub
+  if (pipCtx.github) {
+    flat.github_repo             = pipCtx.github.github_repo ?? '';
+    flat.github_branch_protected = pipCtx.github.github_branch_protected ?? false;
+    flat.github_visibility       = pipCtx.github.github_visibility ?? '';
+    flat.github_default_branch   = pipCtx.github.github_default_branch ?? '';
+  }
+  return flat;
+}
+
 // ── Claude Code file operation payload ───────────────────────────
 export function buildFileOperationPayload(params: {
   osUser:           string;
@@ -370,6 +395,7 @@ export function buildFileOperationPayload(params: {
   prompt?:          string;
   prompt_history?:  string[];
   spiffeId?:        string;
+  pipCtx?:          any;
 }) {
   const fileZone   = resolveFileZone(params.filePath || params.command || '');
   const cedarAction = mapToolToAction(params.toolName);
@@ -433,6 +459,7 @@ export function buildFileOperationPayload(params: {
       prompt:           (params.prompt || '').slice(0, 500),
       prompt_history:   (params.prompt_history || []).slice(-3).join(' | ').slice(0, 500),
       ...(params.spiffeId ? { spiffe_id: params.spiffeId } : {}),
+      ...flattenPIPContext(params.pipCtx),
     },
     session_id: params.sessionId,
   };
@@ -447,6 +474,7 @@ export function buildClaudeCodePromptPayload(params: {
   bypassAttempt: boolean;
   scores:        Record<string, any>;
   spiffeId?:     string;
+  pipCtx?:       any;
 }) {
   return {
     principal: buildDeveloperPrincipal(params.osUser, 'main'),
@@ -469,6 +497,7 @@ export function buildClaudeCodePromptPayload(params: {
       prompt_snippet:   params.promptSnippet.slice(0, 200),
       trust_score:      params.scores.trust_score ?? 70,
       ...(params.spiffeId ? { spiffe_id: params.spiffeId } : {}),
+      ...flattenPIPContext(params.pipCtx),
     },
     session_id: params.sessionId,
   };
@@ -487,6 +516,7 @@ export function buildMCPToolPayload(params: {
   prompt?:          string;
   prompt_history?:  string[];
   spiffeId?:        string;
+  pipCtx?:          any;
 }) {
   const cedarAction = classifyMCPTool(params.toolName);
   const mcpToolId   = `${params.serverName}__${params.toolName}`;
@@ -523,6 +553,7 @@ export function buildMCPToolPayload(params: {
       prompt:           (params.prompt || '').slice(0, 500),
       prompt_history:   (params.prompt_history || []).slice(-3).join(' | ').slice(0, 500),
       ...(params.spiffeId ? { spiffe_id: params.spiffeId } : {}),
+      ...flattenPIPContext(params.pipCtx),
     },
     session_id: params.sessionId,
   };
