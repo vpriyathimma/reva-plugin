@@ -118,7 +118,24 @@ export async function queryJira(ticketId: string): Promise<JiraContext> {
       jira_appsec_review:  appsecReview,
     };
 
-    console.log(`[PIP:Jira] ${ticketId}: assignee=${result.jira_assignee}, status=${result.jira_status}, component=${result.jira_component}, appsec=${result.jira_appsec_review}`);
+    // Jira Cloud v3 often hides email — fetch via user API if missing
+    if (!result.jira_assignee_email && fields.assignee?.accountId) {
+      try {
+        const userResp = await fetch(
+          `${JIRA_BASE_URL}/rest/api/3/user?accountId=${fields.assignee.accountId}`,
+          {
+            headers: { 'Authorization': `Basic ${auth}`, 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(3000),
+          }
+        );
+        if (userResp.ok) {
+          const userData = await userResp.json() as any;
+          result.jira_assignee_email = userData.emailAddress || '';
+        }
+      } catch { /* non-blocking */ }
+    }
+
+    console.log(`[PIP:Jira] ${ticketId}: assignee=${result.jira_assignee}, email=${result.jira_assignee_email || 'NOT_AVAILABLE'}, status=${result.jira_status}, component=${result.jira_component}, appsec=${result.jira_appsec_review}`);
     return result;
   } catch (err: any) {
     console.warn(`[PIP:Jira] Failed for ${ticketId}: ${err.message}`);
