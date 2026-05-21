@@ -166,7 +166,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
 
   const agents = useMemo(() => {
     const map = new Map<string, {
-      user: string; agent_id: string; os_type: string; hostname: string; model: string;
+      user: string; os_user_name: string; agent_id: string; os_type: string; hostname: string; model: string;
       sessions: Session[]; lastSeen: string; totalDecisions: number; denyCount: number;
       mcpServers: Set<string>; projects: Set<string>;
       spiffe_id: string; oauth_email: string;
@@ -177,9 +177,9 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       connection_type: string; ssh_client_ip: string; remote_os: string;
     }>();
     sessions.forEach(s => {
-      const key = s.oauth_email || s.user_email;
+      const key = `${s.oauth_email || s.user_email}::${s.hostname || 'unknown'}`;
       if (!map.has(key)) map.set(key, {
-        user: key, agent_id: '', os_type: '', hostname: '', model: '',
+        user: key, os_user_name: '', agent_id: '', os_type: '', hostname: '', model: '',
         sessions: [], lastSeen: s.enrolled_at, totalDecisions: 0, denyCount: 0,
         mcpServers: new Set(), projects: new Set(),
         spiffe_id: '', oauth_email: '',
@@ -194,6 +194,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       if (new Date(s.enrolled_at) > new Date(entry.lastSeen)) entry.lastSeen = s.enrolled_at;
       // Take latest non-empty values
       if (s.agent_id) entry.agent_id = s.agent_id;
+      if (s.user_email) entry.os_user_name = s.user_email;
       if (s.os_type) entry.os_type = s.os_type;
       if (s.hostname) entry.hostname = s.hostname;
       if (s.model) entry.model = s.model;
@@ -301,7 +302,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         {a.spiffe_id && detailRow('Identity Source', <Badge text="SPIRE" fg={T.green} bg={T.greenBg} />)}
                         {a.oauth_email && detailRow('Authenticated As', a.oauth_email)}
                         {detailRow('Developer', a.developer_name || a.user)}
-                        {detailRow('Owner', a.user)}
+                        {detailRow('Owner', a.os_user_name || a.user)}
                         {detailRow('Environment', a.connection_type === 'ssh'
                           ? <Badge text="Dev Server" fg="#7c3aed" bg="#ede9fe" />
                           : <Badge text="Local" fg={T.accent} bg={T.gray100} />
