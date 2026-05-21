@@ -177,7 +177,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       connection_type: string; ssh_client_ip: string; remote_os: string;
     }>();
     sessions.forEach(s => {
-      const key = s.user_email;
+      const key = s.oauth_email || s.user_email;
       if (!map.has(key)) map.set(key, {
         user: key, agent_id: '', os_type: '', hostname: '', model: '',
         sessions: [], lastSeen: s.enrolled_at, totalDecisions: 0, denyCount: 0,
@@ -261,7 +261,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ fontWeight: 600, fontSize: 14 }}>{a.user}</span>
+                      <span style={{ fontWeight: 600, fontSize: 14 }}>{a.developer_name || a.user}</span>
                       <span style={{ fontSize: 11, color: isOnline ? T.green : T.gray400 }}>{isOnline ? 'Online' : 'Offline'}</span>
                     </div>
                     <div style={{ fontSize: 12, color: T.gray400, marginTop: 2 }}>
