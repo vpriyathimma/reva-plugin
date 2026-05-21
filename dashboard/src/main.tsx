@@ -218,10 +218,13 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       (s.mcp_servers_discovered || []).forEach(m => entry.mcpServers.add(m));
     });
     decisions.forEach(d => {
-      const entry = map.get(d.user_email);
-      if (entry) {
-        entry.totalDecisions++;
-        if (d.effect === 'Deny') entry.denyCount++;
+      // Match decision to agent via session_id → find which agent owns this session
+      for (const entry of map.values()) {
+        if (entry.sessions.some(s => s.session_id === d.session_id) || entry.os_user_name === d.user_email) {
+          entry.totalDecisions++;
+          if (d.effect === 'Deny') entry.denyCount++;
+          break;
+        }
       }
     });
     return Array.from(map.values());
