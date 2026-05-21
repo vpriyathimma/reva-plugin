@@ -22,6 +22,70 @@ function resolveHITLEmail(osUser: string): string {
   return HITL_MAP[osUser] || osUser;
 }
 
+// ── Specific denial messages based on PIP context ──
+function getDenyReason(pipCtx: any, cedarPayload: any): string {
+  const ctx = cedarPayload?.context || {};
+
+  // Layer 1: Identity
+  if (ctx.git_email && ctx.oauth_email && ctx.git_email !== ctx.oauth_email) {
+    return `Identity mismatch — your git identity (${ctx.git_email}) doesn't match your authenticated identity (${ctx.oauth_email}). Update your git config: git config user.email "${ctx.oauth_email}"`;
+  }
+
+  // Layer 1: SSH-only repo
+  if (ctx.project_name && ctx.connection_type === 'local' && pipCtx?.github?.github_repo) {
+    // Check if this repo requires SSH (we know reva-auth-service does)
+    // This will be caught by CC-FORBID-004 but we provide a clear message
+  }
+
+  // Layer 3: Risk — injection
+  if (ctx.injection_score >= 50) {
+    return `Security alert — prompt injection detected (score: ${ctx.injection_score}). This action is permanently blocked.`;
+  }
+
+  // Layer 3: Risk — trust collapse
+  if (ctx.trust_score < 15) {
+    return `Security alert — trust score critically low (${ctx.trust_score}). Multiple risk signals detected. All actions blocked.`;
+  }
+
+  // Layer 3: Risk — escalation
+  if (ctx.escalation_score >= 60) {
+    return `Privilege escalation detected (score: ${ctx.escalation_score}). This action is blocked.`;
+  }
+
+  // Layer 2: Protected branch
+  if (ctx.github_branch_protected === true) {
+    return `Protected branch — changes to protected branches require approval. Create a feature branch from your Jira ticket.`;
+  }
+
+  // Layer 2: No Jira ticket
+  if (pipCtx?.jira?.jira_ticket_exists === false || ctx.jira_ticket_exists === false) {
+    return `No Jira ticket found for this branch. Create a ticket and use a branch with the ticket ID (e.g., feature/SCRUM-123-description).`;
+  }
+
+  // Layer 2: Wrong developer
+  if (ctx.jira_assignee && ctx.jira_assignee_email && ctx.oauth_email && ctx.jira_assignee_email !== ctx.oauth_email) {
+    return `Ticket ${ctx.jira_ticket_id} is assigned to ${ctx.jira_assignee}, not you. Get the ticket reassigned or work on your assigned tickets.`;
+  }
+
+  // Layer 2: Wrong developer (email not available, use display name)
+  if (ctx.jira_assignee && ctx.jira_ticket_exists === true && !ctx.jira_assignee_email) {
+    return `Ticket ${ctx.jira_ticket_id} is assigned to ${ctx.jira_assignee}. Assignee email could not be verified. Contact your Jira administrator.`;
+  }
+
+  // Layer 2: Wrong status
+  if (ctx.jira_status && ctx.jira_status !== 'In Progress' && ctx.jira_ticket_exists === true) {
+    return `Ticket ${ctx.jira_ticket_id} is in "${ctx.jira_status}" status. Move it to "In Progress" before making code changes.`;
+  }
+
+  // Layer 3: Subagent write
+  if (ctx.agent_type === 'subagent') {
+    return `Spawned agents are restricted to read-only. Only the main developer agent can modify files.`;
+  }
+
+  // Default
+  return 'Blocked by governance policy — no matching authorization for this action.';
+}
+
 // Track active MCP servers discovered via PreToolUse
 export const activeMcpServers = new Map<string, Set<string>>(); // session_id → Set of server names
 
@@ -252,7 +316,8 @@ export async function handleToolCall(req: Request, res: Response) {
 
     if (cedarResult.decision === 'deny') {
       effect = 'Deny';
-      reason = 'Blocked by Reva Governance Policy — no matching authorization';
+      // Generate specific denial message from PIP context
+      reason = getDenyReason(pipCtx, cedarPayload);
     }
 
     logDecision({
