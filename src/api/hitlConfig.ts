@@ -81,6 +81,23 @@ export function findApprovalForDeveloper(
   return undefined;
 }
 
+export function findPendingApproval(
+  developerEmail: string,
+  project: string
+): ApprovalRecord | undefined {
+  for (const record of approvalStore.values()) {
+    if (
+      record.developer_email === developerEmail &&
+      record.project === project &&
+      record.status === 'pending' &&
+      new Date(record.expires_at) > new Date()
+    ) {
+      return record;
+    }
+  }
+  return undefined;
+}
+
 // ── Slack API ──
 
 const SLACK_API = 'https://slack.com/api';
