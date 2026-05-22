@@ -741,6 +741,105 @@ function UsageAnalytics({ decisions, sessions }: { decisions: Decision[]; sessio
 
 // ── Section D: Admin Classification Config ───────────────────────
 function AdminConfig() {
+  // HITL Configuration state
+  const [hitlEnabled, setHitlEnabled] = useState(false);
+  const [hitlIntegration, setHitlIntegration] = useState<'slack' | 'okta' | 'webhook'>('slack');
+  const [slackToken, setSlackToken] = useState('');
+  const [slackTokenDisplay, setSlackTokenDisplay] = useState('');
+  const [slackConnected, setSlackConnected] = useState(false);
+  const [slackTeam, setSlackTeam] = useState('');
+  const [slackChannels, setSlackChannels] = useState<{ id: string; name: string }[]>([]);
+  const [selectedChannel, setSelectedChannel] = useState('');
+  const [selectedChannelId, setSelectedChannelId] = useState('');
+  const [approverEmail, setApproverEmail] = useState('');
+  const [approvalExpiry, setApprovalExpiry] = useState(60);
+  const [hitlStatus, setHitlStatus] = useState('');
+  const [hitlLoading, setHitlLoading] = useState(false);
+  const APPROVERS = ['sai.srungaram@reva.ai', 'yash.prakash@reva.ai', 'amit.phadke@reva.ai'];
+
+  // Load HITL config on mount
+  useEffect(() => {
+    fetchJSON('/api/config/hitl').then((cfg: any) => {
+      setHitlEnabled(cfg.enabled || false);
+      setHitlIntegration(cfg.integration || 'slack');
+      setSlackTokenDisplay(cfg.slack_bot_token || '');
+      setSlackConnected(cfg.slack_connected || false);
+      setSelectedChannel(cfg.slack_channel || '');
+      setSelectedChannelId(cfg.slack_channel_id || '');
+      setApproverEmail(cfg.approver_email || '');
+      setApprovalExpiry(cfg.approval_expiry_minutes || 60);
+    }).catch(() => {});
+  }, []);
+
+  // Fetch channels when connected
+  useEffect(() => {
+    if (slackConnected) {
+      fetchJSON('/api/hitl/slack/channels').then((data: any) => {
+        if (data.ok) setSlackChannels(data.channels || []);
+      }).catch(() => {});
+    }
+  }, [slackConnected]);
+
+  const applyToken = async () => {
+    if (!slackToken) return;
+    setHitlLoading(true);
+    setHitlStatus('');
+    try {
+      const r = await fetch('/api/hitl/slack/apply-token', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: slackToken }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        setSlackConnected(true);
+        setSlackTeam(data.team || '');
+        setSlackTokenDisplay('••••••' + slackToken.slice(-8));
+        setSlackToken('');
+        setHitlStatus('connected');
+        // Fetch channels
+        const chResp = await fetch('/api/hitl/slack/channels');
+        const chData = await chResp.json();
+        if (chData.ok) setSlackChannels(chData.channels || []);
+      } else {
+        setHitlStatus(`error:${data.error}`);
+      }
+    } catch (e: any) { setHitlStatus(`error:${e.message}`); }
+    setHitlLoading(false);
+  };
+
+  const sendTestMsg = async () => {
+    setHitlLoading(true);
+    try {
+      const r = await fetch('/api/hitl/slack/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: selectedChannelId || selectedChannel }),
+      });
+      const data = await r.json();
+      setHitlStatus(data.ok ? 'test_sent' : `error:${data.error}`);
+    } catch (e: any) { setHitlStatus(`error:${e.message}`); }
+    setHitlLoading(false);
+  };
+
+  const saveHitlConfig = async () => {
+    setHitlLoading(true);
+    try {
+      await fetch('/api/config/hitl', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: hitlEnabled,
+          integration: hitlIntegration,
+          slack_channel: selectedChannel,
+          slack_channel_id: selectedChannelId,
+          approver_email: approverEmail,
+          approval_expiry_minutes: approvalExpiry,
+        }),
+      });
+      setHitlStatus('saved');
+      setTimeout(() => setHitlStatus(''), 2000);
+    } catch (e: any) { setHitlStatus(`error:${e.message}`); }
+    setHitlLoading(false);
+  };
+
   // Command classifications — editable
   const [commands, setCommands] = useState([
     { pattern: 'rm |drop table|truncate|delete from|mkfs|dd if=|>/dev/|kill -9|pkill|rmdir', risk: 'destructive' },
@@ -793,7 +892,127 @@ function AdminConfig() {
 
   return (
     <div>
-      <SectionHeader title="Admin Classification Config" sub="Configure command risk levels, file zone mappings, and generate Cedar policy templates" />
+      <SectionHeader title="Admin Configuration" sub="Configure HITL approvals, command risk levels, and file zone mappings" />
+
+      {/* HITL Configuration */}
+      <div style={{ marginBottom: 40 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>🛡️</span> Human-in-the-loop
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: hitlEnabled ? T.green : T.gray400 }}>{hitlEnabled ? 'Enabled' : 'Disabled'}</span>
+            <div onClick={() => setHitlEnabled(!hitlEnabled)} style={{
+              width: 40, height: 22, borderRadius: 11, cursor: 'pointer', position: 'relative' as const, transition: 'background 0.2s',
+              background: hitlEnabled ? T.accent : T.gray300,
+            }}>
+              <div style={{ width: 18, height: 18, borderRadius: 9, background: '#fff', position: 'absolute' as const, top: 2, transition: 'left 0.2s', left: hitlEnabled ? 20 : 2 }} />
+            </div>
+          </div>
+        </div>
+
+        {/* Integration selection */}
+        <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, padding: 20, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: T.gray500, marginBottom: 10 }}>Select integration</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+            {(['slack', 'okta', 'webhook'] as const).map(opt => (
+              <div key={opt} onClick={() => setHitlIntegration(opt)} style={{
+                flex: 1, padding: '12px 8px', borderRadius: 8, cursor: 'pointer', textAlign: 'center' as const,
+                border: hitlIntegration === opt ? `2px solid ${T.accent}` : `1px solid ${T.gray200}`,
+                background: hitlIntegration === opt ? T.accentLight : 'transparent',
+                opacity: opt === 'slack' ? 1 : 0.4,
+              }}>
+                <div style={{ fontSize: 18, marginBottom: 4 }}>{opt === 'slack' ? '💬' : opt === 'okta' ? '🔐' : '🔗'}</div>
+                <div style={{ fontSize: 12, fontWeight: hitlIntegration === opt ? 600 : 400, color: hitlIntegration === opt ? T.accent : T.gray500 }}>
+                  {opt === 'slack' ? 'Slack' : opt === 'okta' ? 'Okta Verify' : 'Webhook'}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Slack setup */}
+          {hitlIntegration === 'slack' && (
+            <div style={{ borderTop: `1px solid ${T.gray200}`, paddingTop: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>Slack setup</span>
+                {slackConnected && (
+                  <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 10, background: T.greenBg, color: T.green, fontWeight: 600 }}>✓ Connected{slackTeam ? ` — ${slackTeam}` : ''}</span>
+                )}
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, color: T.gray500, marginBottom: 4 }}>Bot token</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input type="password" value={slackToken || slackTokenDisplay} onChange={e => { setSlackToken(e.target.value); setSlackTokenDisplay(''); }}
+                    placeholder="xoxb-..." style={{ ...inputStyle, flex: 1, fontFamily: T.mono }} />
+                  <button onClick={applyToken} disabled={hitlLoading || !slackToken} style={{ ...btnPrimary, opacity: (hitlLoading || !slackToken) ? 0.5 : 1 }}>Apply token</button>
+                </div>
+                {hitlStatus.startsWith('error:') && <div style={{ fontSize: 11, color: T.red, marginTop: 4 }}>{hitlStatus.replace('error:', '')}</div>}
+              </div>
+
+              {slackConnected && (
+                <>
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, color: T.gray500, marginBottom: 4 }}>Approval channel</div>
+                    <select value={selectedChannelId} onChange={e => {
+                      const ch = slackChannels.find(c => c.id === e.target.value);
+                      setSelectedChannelId(e.target.value);
+                      setSelectedChannel(ch ? `#${ch.name}` : '');
+                    }} style={selectStyle}>
+                      <option value="">Select a channel</option>
+                      {slackChannels.map(ch => <option key={ch.id} value={ch.id}>#{ch.name}</option>)}
+                    </select>
+                    {slackChannels.length === 0 && <div style={{ fontSize: 11, color: T.gray400, marginTop: 4 }}>Add channels:read scope to your Slack app to auto-fetch channels</div>}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Approver */}
+        {slackConnected && (
+          <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, padding: 20, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>👤</span> Approver
+            </div>
+            <select value={approverEmail} onChange={e => setApproverEmail(e.target.value)} style={{ ...selectStyle, width: '100%', padding: '10px 12px', fontSize: 13 }}>
+              <option value="">Select an approver</option>
+              {APPROVERS.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Approval settings */}
+        {slackConnected && (
+          <div style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, padding: 20, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>⏱️</span> Approval settings
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: T.gray500, marginBottom: 4 }}>Approval valid for</div>
+              <select value={approvalExpiry} onChange={e => setApprovalExpiry(Number(e.target.value))} style={{ ...selectStyle, width: 200 }}>
+                <option value={15}>15 minutes</option>
+                <option value={30}>30 minutes</option>
+                <option value={60}>60 minutes</option>
+                <option value={120}>2 hours</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button onClick={sendTestMsg} disabled={!slackConnected || !selectedChannelId || hitlLoading} style={{ ...btnSecondary, opacity: (!slackConnected || !selectedChannelId) ? 0.4 : 1 }}>
+            📤 Send test message
+          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {hitlStatus === 'saved' && <span style={{ fontSize: 11, color: T.green }}>✓ Saved</span>}
+            {hitlStatus === 'test_sent' && <span style={{ fontSize: 11, color: T.green }}>✓ Test message sent</span>}
+            <button onClick={saveHitlConfig} disabled={hitlLoading} style={btnPrimary}>💾 Save</button>
+          </div>
+        </div>
+      </div>
 
       {/* Command Classification */}
       <div style={{ marginBottom: 40 }}>

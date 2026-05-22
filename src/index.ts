@@ -97,6 +97,10 @@ app.use('/api', inventoryRouter);
 app.use('/api', pdpRouter);
 app.use('/api', testIdjagRouter);
 
+// HITL routes
+import { hitlRouter } from './api/hitlConfig';
+app.use('/api', hitlRouter);
+
 // ── Health ────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'reva-plugin', timestamp: new Date().toISOString() });
