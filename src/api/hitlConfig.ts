@@ -280,6 +280,40 @@ export async function handleSlackInteraction(payload: any): Promise<{ ok: boolea
     await updateSlackMessage(record.slack_ts, record);
   }
 
+  // Notify developer via DM
+  if (config.slack_bot_token) {
+    const emoji = record.status === 'approved' ? ':white_check_mark:' : ':x:';
+    const statusText = record.status === 'approved' ? 'Approved' : 'Denied';
+    const devMessage = record.status === 'approved'
+      ? `${emoji} *Your request has been approved* by ${user}\n*Action:* ${record.action} on \`${record.resource}\`\n*Project:* ${record.project}\n\nYou can now retry the action in Claude Code.`
+      : `${emoji} *Your request has been denied* by ${user}\n*Action:* ${record.action} on \`${record.resource}\`\n*Project:* ${record.project}`;
+
+    try {
+      // Look up developer's Slack user ID by email
+      const lookupResp = await slackGet('users.lookupByEmail', config.slack_bot_token, { email: record.developer_email });
+      if (lookupResp.ok && lookupResp.user?.id) {
+        // Open DM channel
+        const dmResp = await slackPost('conversations.open', config.slack_bot_token, { users: lookupResp.user.id });
+        if (dmResp.ok && dmResp.channel?.id) {
+          await slackPost('chat.postMessage', config.slack_bot_token, {
+            channel: dmResp.channel.id,
+            text: devMessage,
+          });
+          console.log(`[HITL] DM sent to ${record.developer_email} — ${statusText}`);
+        }
+      } else {
+        // Fallback: notify in approval channel
+        if (config.slack_channel_id) {
+          await slackPost('chat.postMessage', config.slack_bot_token, {
+            channel: config.slack_channel_id,
+            thread_ts: record.slack_ts,
+            text: `${emoji} *${statusText}* by ${user} — ${record.developer_name} (${record.developer_email}) can ${record.status === 'approved' ? 'now retry the action' : 'not proceed'}.`,
+          });
+        }
+      }
+    } catch { /* non-blocking */ }
+  }
+
   return { ok: true };
 }
 

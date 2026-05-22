@@ -5,6 +5,7 @@ import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
 import { claudeSessionUserStore, spiffeIdStore } from './onSessionStart';
 import { getPIPContext } from '../../api/pip';
+import { getHITLConfig as getHITLConfigFn, findApprovalForDeveloper as findApprovalForDeveloperFn, triggerHITL as triggerHITLFn } from '../../api/hitlConfig';
 import { recordDynamicTool, discoveredServers } from '../../api/mcpProbe';
 import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
@@ -217,7 +218,7 @@ export async function handleToolCall(req: Request, res: Response) {
     const hitlKey      = commandHash
       ? `${session_id}:${tool_name}:${commandHash}`
       : `${session_id}:${tool_name}`;
-    const hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;
+    let hitlAcknowledged = hitlStore.get(hitlKey)?.acknowledged || false;
     const hitlPermanentlyBlocked = hitlStore.get(hitlKey)?.blocked || false;
 
     // If permanently blocked — return hard deny immediately without triggering HITL again
@@ -308,6 +309,62 @@ export async function handleToolCall(req: Request, res: Response) {
           query,
           queryHistory:    priorIntents,
         });
+
+    const cedarAction = (cedarPayload as any)?.action?.name || '';
+    const isWriteAction = ['EditFile', 'WriteFile', 'RunBash'].includes(cedarAction);
+
+    // ── HITL: check if protected branch + write action + HITL enabled ──
+    const hitlConfig = getHITLConfigFn();
+    const branchProtected = pipCtx?.github?.github_branch_protected === true;
+
+    if (hitlConfig.enabled && branchProtected && isWriteAction) {
+      // Check if already approved
+      const existingApproval = findApprovalForDeveloperFn(
+        pipCtx?.oauth_email || user_email,
+        cedarAction,
+        derivedProject
+      );
+
+      if (existingApproval) {
+        // Approval found — set consent for Cedar
+        hitlAcknowledged = true;
+        console.log(`[HITL] Existing approval found for ${user_email} — ${cedarAction} on ${derivedProject}`);
+      } else {
+        // No approval — trigger Slack and deny
+        console.log(`[HITL] Protected branch — triggering Slack approval for ${user_email} ${cedarAction} on ${derivedProject}`);
+        const approval = await triggerHITLFn({
+          developer_email: pipCtx?.oauth_email || user_email,
+          developer_name:  pipCtx?.git_name || user_email,
+          action:          cedarAction,
+          resource:        (cedarPayload as any)?.resource?.id || '',
+          project:         derivedProject,
+          branch:          pipCtx?.github?.github_branch || '',
+          ticket:          pipCtx?.jira?.jira_ticket_id || '',
+        });
+
+        logDecision({
+          timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name,
+          server: server_name, sensitivity: result.sensitivity, effect: 'Deny',
+          reason: `Approval required — sent to Slack. Retry after approval.`,
+          intent: promptIntent, trust_score: result.trust_score, scores: result.scores,
+          prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType,
+        });
+
+        return res.json({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: `Approval required for protected branch edit — sent to ${hitlConfig.slack_channel || 'approver'}. Continue other tasks and retry after approval.`,
+          },
+          reva: { effect: 'Deny', reason: 'HITL — awaiting Slack approval', approval_id: approval.id },
+        });
+      }
+    }
+
+    // Update hitlAcknowledged in payload if approval was found
+    if (hitlAcknowledged && (cedarPayload as any)?.context) {
+      (cedarPayload as any).context.approver_consent = true;
+    }
 
     const cedarResult = await evaluateCedar(cedarPayload);
 
