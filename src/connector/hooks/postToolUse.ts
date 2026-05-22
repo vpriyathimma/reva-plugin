@@ -103,12 +103,17 @@ export async function handlePostToolUse(req: Request, res: Response) {
 
         console.log(`[PostToolUse] Branch changed to '${newBranch}', ticket=${ticketId || 'none'} — re-enriching PIP for ${user_email}`);
 
-        enrichSession(user_email, ticketId, remoteUrl, newBranch, {
-          oauth_email:     existingPip?.oauth_email,
-          connection_type: existingPip?.connection_type,
-          git_email:       existingPip?.git_email,
-          git_name:        existingPip?.git_name,
-        }).catch(err => console.warn(`[PostToolUse] PIP re-enrichment failed: ${err.message}`));
+        try {
+          await enrichSession(user_email, ticketId, remoteUrl, newBranch, {
+            oauth_email:     existingPip?.oauth_email,
+            connection_type: existingPip?.connection_type,
+            git_email:       existingPip?.git_email,
+            git_name:        existingPip?.git_name,
+          });
+          console.log(`[PostToolUse] PIP re-enriched for ${user_email} on branch ${newBranch}`);
+        } catch (err: any) {
+          console.warn(`[PostToolUse] PIP re-enrichment failed: ${err.message}`);
+        }
       }
     }
 
