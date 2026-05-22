@@ -8,6 +8,7 @@ import { sessionIntentStore } from './beforePrompt';
 import { claudeSessionUserStore } from './onSessionStart';
 import { sessionStore }       from '../discovery/enroll';
 import { activeMcpServers }   from './beforeToolCall';
+import { enrichSession, getPIPContext } from '../../api/pip';
 
 // Audit store — what actually executed (separate from PDP decisions)
 export interface AuditEntry {
@@ -85,6 +86,30 @@ export async function handlePostToolUse(req: Request, res: Response) {
       });
 
       console.log(`[PostToolUse] ERROR session=${session_id} tool=${tool_name} error=${(tool_error || '').slice(0, 100)}`);
+    }
+
+    // ── PIP re-enrichment on branch change ──
+    // Detect git checkout/switch in bash tool output and re-enrich PIP
+    if (tool_name === 'Bash' && success && typeof tool_result === 'string') {
+      const branchMatch = tool_result.match(/Switched to (?:a new )?branch '([^']+)'/);
+      if (branchMatch) {
+        const newBranch = branchMatch[1];
+        const ticketMatch = newBranch.match(/([A-Z]+-[0-9]+)/);
+        const ticketId = ticketMatch ? ticketMatch[1] : '';
+        const existingPip = getPIPContext(user_email);
+        const remoteUrl = existingPip?.github?.github_repo
+          ? `https://github.com/${existingPip.github.github_repo}.git`
+          : '';
+
+        console.log(`[PostToolUse] Branch changed to '${newBranch}', ticket=${ticketId || 'none'} — re-enriching PIP for ${user_email}`);
+
+        enrichSession(user_email, ticketId, remoteUrl, newBranch, {
+          oauth_email:     existingPip?.oauth_email,
+          connection_type: existingPip?.connection_type,
+          git_email:       existingPip?.git_email,
+          git_name:        existingPip?.git_name,
+        }).catch(err => console.warn(`[PostToolUse] PIP re-enrichment failed: ${err.message}`));
+      }
     }
 
     // Log for dashboard
