@@ -122,7 +122,7 @@ export async function testSlackToken(token: string): Promise<{ ok: boolean; team
 export async function fetchSlackChannels(token: string): Promise<{ id: string; name: string }[]> {
   try {
     const data = await slackGet('conversations.list', token, {
-      types: 'public_channel,private_channel',
+      types: 'public_channel',
       limit: '100',
       exclude_archived: 'true',
     });
