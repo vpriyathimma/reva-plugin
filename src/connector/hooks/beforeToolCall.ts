@@ -168,8 +168,11 @@ export async function handleToolCall(req: Request, res: Response) {
     const user_email = osUserFromHeader || osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
 
     // ── Terminate Session — checked first, blocks everything ──
-    const pipCtxKill = getPIPContext(user_email);
-    const terminateKey = `${pipCtxKill?.oauth_email || user_email}::${req.body?.hostname || enrolledSession?.hostname || 'unknown'}`;
+    const pipCtxTerm = getPIPContext(user_email);
+    const termHostname = req.body?.hostname || enrolledSession?.hostname || req.headers['x-hostname'] || 'unknown';
+    const termEmail = pipCtxTerm?.oauth_email || user_email;
+    const terminateKey = `${termEmail}::${termHostname}`;
+    console.log(`[SESSION] Checking terminate: key=${terminateKey}`);
     if (isSessionTerminated(terminateKey)) {
       console.log(`[SESSION] Blocked: ${terminateKey} — session terminated by administrator`);
       return res.json({
