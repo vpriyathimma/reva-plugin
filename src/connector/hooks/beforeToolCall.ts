@@ -339,6 +339,7 @@ export async function handleToolCall(req: Request, res: Response) {
 
           if (!existingPending) {
             console.log(`[SVID] No credential — triggering HITL for ${privileged.type} by ${developerEmail} on ${derivedProject}`);
+            const spiffeId = spiffeIdStore.get(session_id) || '';
             await triggerHITLFn({
               developer_email: developerEmail,
               developer_name:  pipCtx?.git_name || user_email,
@@ -347,6 +348,7 @@ export async function handleToolCall(req: Request, res: Response) {
               project:         derivedProject,
               branch:          pipCtx?.github?.github_branch || '',
               ticket:          pipCtx?.jira?.jira_ticket_id || '',
+              spiffe_id:       spiffeId,
             });
           }
 

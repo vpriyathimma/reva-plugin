@@ -41,6 +41,7 @@ export interface ApprovalRecord {
   resolved_by?:    string;
   expires_at:      string;
   slack_ts?:       string;
+  spiffe_id?:      string;
 }
 
 const approvalStore = new Map<string, ApprovalRecord>();
@@ -298,7 +299,7 @@ export async function handleSlackInteraction(payload: any): Promise<{ ok: boolea
       developer_email: record.developer_email,
       action:          record.action,
       project:         record.project,
-      spiffe_id:       '',
+      spiffe_id:       record.spiffe_id || '',
       issued_by:       user,
     });
     svidInfo = ` SVID issued: ${svid.id}, jwt=${svid.jwt ? 'yes' : 'no'}, expires ${svid.expires_at}`;
@@ -358,6 +359,7 @@ export async function triggerHITL(details: {
   project:         string;
   branch:          string;
   ticket:          string;
+  spiffe_id?:      string;
 }): Promise<ApprovalRecord> {
   const id = `hitl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date();
@@ -369,6 +371,7 @@ export async function triggerHITL(details: {
     status:       'pending',
     requested_at: now.toISOString(),
     expires_at:   expires.toISOString(),
+    spiffe_id:    details.spiffe_id || '',
   };
 
   approvalStore.set(id, record);
