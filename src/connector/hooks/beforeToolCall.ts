@@ -321,6 +321,7 @@ export async function handleToolCall(req: Request, res: Response) {
     const branchProtected = pipCtx?.github?.github_branch_protected === true;
 
     if (privileged.privileged && branchProtected && cedarAction === 'RunBash') {
+      console.log(`[SVID] Privileged command detected: ${privileged.type} on protected branch, HITL enabled=${hitlConfig.enabled}`);
       const developerEmail = pipCtx?.oauth_email || user_email;
       const svid = validateSVID(developerEmail, derivedProject);
 
@@ -370,7 +371,8 @@ export async function handleToolCall(req: Request, res: Response) {
           });
         }
 
-        // HITL not enabled — just deny with SVID context
+        // HITL not enabled — log and deny with SVID context
+        console.log(`[SVID] Privileged command '${privileged.type}' on protected branch but HITL not enabled — denying`);
         (cedarPayload as any).context.svid_active = false;
         (cedarPayload as any).context.svid_status = 'none';
         (cedarPayload as any).context.svid_ttl_remaining = 0;
