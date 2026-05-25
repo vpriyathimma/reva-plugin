@@ -20,6 +20,9 @@ export const claudeSessionUserStore = new Map<string, string>();
 // SPIFFE ID store — maps session_id → spiffe_id (for Cedar principal in subsequent hooks)
 export const spiffeIdStore = new Map<string, string>();
 
+// Hostname store — maps os_user → hostname (for terminate session key matching)
+export const hostnameStore = new Map<string, string>();
+
 // Agent ID store — maps os_user:hostname → synthetic agent ID (fallback)
 const agentIdStore = new Map<string, string>();
 
@@ -199,6 +202,11 @@ export async function handleSessionStart(req: Request, res: Response) {
 
     // Store os_user for this session so PreToolUse can resolve identity
     claudeSessionUserStore.set(session_id, os_user);
+
+    // Store hostname for terminate session key matching
+    if (hostname) {
+      hostnameStore.set(os_user, hostname);
+    }
 
     // Store SPIFFE ID for subsequent hooks (PreToolUse, PostToolUse)
     if (spiffe_id) {

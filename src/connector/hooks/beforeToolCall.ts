@@ -3,7 +3,7 @@ import { classifyToolCall }      from '../../api/intentClassifier';
 import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
-import { claudeSessionUserStore, spiffeIdStore } from './onSessionStart';
+import { claudeSessionUserStore, spiffeIdStore, hostnameStore } from './onSessionStart';
 import { getPIPContext } from '../../api/pip';
 import { getHITLConfig as getHITLConfigFn, findApprovalForDeveloper as findApprovalForDeveloperFn, findPendingApproval as findPendingApprovalFn, triggerHITL as triggerHITLFn } from '../../api/hitlConfig';
 import { isSessionTerminated } from '../../api/sessionControl';
@@ -169,10 +169,9 @@ export async function handleToolCall(req: Request, res: Response) {
 
     // ── Terminate Session — checked first, blocks everything ──
     const pipCtxTerm = getPIPContext(user_email);
-    const termHostname = req.body?.hostname || enrolledSession?.hostname || req.headers['x-hostname'] || 'unknown';
+    const termHostname = hostnameStore.get(user_email) || req.body?.hostname || enrolledSession?.hostname || 'unknown';
     const termEmail = pipCtxTerm?.oauth_email || user_email;
     const terminateKey = `${termEmail}::${termHostname}`;
-    console.log(`[SESSION] Checking terminate: key=${terminateKey}`);
     if (isSessionTerminated(terminateKey)) {
       console.log(`[SESSION] Blocked: ${terminateKey} — session terminated by administrator`);
       return res.json({
