@@ -13,16 +13,16 @@ export interface HITLConfig {
   approval_expiry_minutes: number;
 }
 
-// In-memory config — admin updates via dashboard
+// In-memory config — initialized from env vars, admin updates via dashboard
 let config: HITLConfig = {
-  enabled:                false,
+  enabled:                process.env.HITL_ENABLED === 'true',
   integration:            'slack',
-  slack_bot_token:        '',
-  slack_channel:          '',
-  slack_channel_id:       '',
-  slack_connected:        false,
-  approver_email:         '',
-  approval_expiry_minutes: 60,
+  slack_bot_token:        process.env.HITL_SLACK_BOT_TOKEN || '',
+  slack_channel:          process.env.HITL_SLACK_CHANNEL || '',
+  slack_channel_id:       process.env.HITL_SLACK_CHANNEL_ID || '',
+  slack_connected:        !!process.env.HITL_SLACK_BOT_TOKEN,
+  approver_email:         process.env.HITL_APPROVER_EMAIL || '',
+  approval_expiry_minutes: parseInt(process.env.HITL_APPROVAL_EXPIRY || '60', 10),
 };
 
 // Approval store — tracks pending and completed approvals
@@ -290,7 +290,21 @@ export async function handleSlackInteraction(payload: any): Promise<{ ok: boolea
   record.resolved_by = user;
   approvalStore.set(approvalId, record);
 
-  console.log(`[HITL:Slack] ${record.status.toUpperCase()} by ${user} — ${record.developer_email} ${record.action} on ${record.project}`);
+  // Issue SVID if approved for privileged action
+  let svidInfo = '';
+  if (record.status === 'approved' && record.action.includes('SVID required')) {
+    const { issueSVID } = await import('./svid');
+    const svid = await issueSVID({
+      developer_email: record.developer_email,
+      action:          record.action,
+      project:         record.project,
+      spiffe_id:       '',
+      issued_by:       user,
+    });
+    svidInfo = ` SVID issued: ${svid.id}, jwt=${svid.jwt ? 'yes' : 'no'}, expires ${svid.expires_at}`;
+  }
+
+  console.log(`[HITL:Slack] ${record.status.toUpperCase()} by ${user} — ${record.developer_email} ${record.action} on ${record.project}${svidInfo}`);
 
   // Update the Slack message to show resolved state
   if (record.slack_ts) {
