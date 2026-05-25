@@ -6,6 +6,7 @@ import { sessionStore }          from '../discovery/enroll';
 import { claudeSessionUserStore, spiffeIdStore } from './onSessionStart';
 import { getPIPContext } from '../../api/pip';
 import { getHITLConfig as getHITLConfigFn, findApprovalForDeveloper as findApprovalForDeveloperFn, findPendingApproval as findPendingApprovalFn, triggerHITL as triggerHITLFn } from '../../api/hitlConfig';
+import { isPrivilegedCommand, validateSVID } from '../../api/svid';
 import { recordDynamicTool, discoveredServers } from '../../api/mcpProbe';
 import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
@@ -312,10 +313,70 @@ export async function handleToolCall(req: Request, res: Response) {
 
     const cedarAction = (cedarPayload as any)?.action?.name || '';
     const isWriteAction = ['EditFile', 'WriteFile'].includes(cedarAction);
+    const bashCommand = req.body?.tool_input?.command || '';
 
-    // ── HITL: check if protected branch + write action + HITL enabled ──
+    // ── SVID: check for privileged commands (git push, merge, PR) ──
+    const privileged = isPrivilegedCommand(bashCommand);
     const hitlConfig = getHITLConfigFn();
     const branchProtected = pipCtx?.github?.github_branch_protected === true;
+
+    if (privileged.privileged && branchProtected && cedarAction === 'RunBash') {
+      const developerEmail = pipCtx?.oauth_email || user_email;
+      const svid = validateSVID(developerEmail, derivedProject);
+
+      if (svid) {
+        // Valid SVID — set details for Cedar context and decision logs
+        const ttlRemaining = Math.max(0, Math.floor((new Date(svid.expires_at).getTime() - Date.now()) / 1000));
+        (cedarPayload as any).context.svid_active = true;
+        (cedarPayload as any).context.svid_status = 'active';
+        (cedarPayload as any).context.svid_ttl_remaining = ttlRemaining;
+        (cedarPayload as any).context.svid_id = svid.id;
+        console.log(`[SVID] Valid credential: ${svid.id} for ${developerEmail} — ${privileged.type} on ${derivedProject}, TTL ${ttlRemaining}s`);
+      } else {
+        // No valid SVID — trigger HITL for approval + SVID issuance
+        if (hitlConfig.enabled) {
+          const existingPending = findPendingApprovalFn(developerEmail, derivedProject);
+
+          if (!existingPending) {
+            console.log(`[SVID] No credential — triggering HITL for ${privileged.type} by ${developerEmail} on ${derivedProject}`);
+            await triggerHITLFn({
+              developer_email: developerEmail,
+              developer_name:  pipCtx?.git_name || user_email,
+              action:          `${privileged.type} (SVID required)`,
+              resource:        bashCommand,
+              project:         derivedProject,
+              branch:          pipCtx?.github?.github_branch || '',
+              ticket:          pipCtx?.jira?.jira_ticket_id || '',
+            });
+          }
+
+          logDecision({
+            timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name,
+            server: server_name, sensitivity: result.sensitivity, effect: 'Deny',
+            reason: `SVID required for ${privileged.type} — sent for approval`,
+            intent: promptIntent, trust_score: result.trust_score, scores: result.scores,
+            prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType,
+          });
+
+          return res.json({
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: `Short-lived credential required for ${privileged.type} on protected branch. Approval sent to ${hitlConfig.slack_channel || 'approver'}. Retry after approval.`,
+            },
+            reva: { effect: 'Deny', reason: `SVID required — ${privileged.type} on protected branch` },
+          });
+        }
+
+        // HITL not enabled — just deny with SVID context
+        (cedarPayload as any).context.svid_active = false;
+        (cedarPayload as any).context.svid_status = 'none';
+        (cedarPayload as any).context.svid_ttl_remaining = 0;
+        (cedarPayload as any).context.svid_id = '';
+      }
+    }
+
+    // ── HITL: check if protected branch + write action + HITL enabled ──
 
     if (hitlConfig.enabled && branchProtected && isWriteAction) {
       // Check if already approved
