@@ -163,6 +163,31 @@ function timeAgo(ts: string): string {
 // ── Section A: Claude Code Agents ─────────────────────────────────
 function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisions: Decision[] }) {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+  const [terminatedSessions, setTerminatedSessions] = useState<Set<string>>(new Set());
+
+  // Fetch terminated sessions
+  useEffect(() => {
+    fetchJSON('/api/session/terminated').then((data: any) => {
+      setTerminatedSessions(new Set(data.terminated || []));
+    }).catch(() => {});
+  }, []);
+
+  const toggleTerminate = async (key: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const isTerminated = terminatedSessions.has(key);
+    const endpoint = isTerminated ? '/api/session/restore' : '/api/session/terminate';
+    try {
+      await fetch(endpoint, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      setTerminatedSessions(prev => {
+        const next = new Set(prev);
+        isTerminated ? next.delete(key) : next.add(key);
+        return next;
+      });
+    } catch { }
+  };
 
   const agents = useMemo(() => {
     const map = new Map<string, {
@@ -289,6 +314,14 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                       <div style={{ fontSize: 16, fontWeight: 700, color: denyRate > 20 ? T.red : denyRate > 5 ? T.amber : T.green }}>{denyRate}%</div>
                       <div style={{ fontSize: 10, color: T.gray400 }}>deny rate</div>
                     </div>
+                    <button onClick={(e) => toggleTerminate(a.user, e)} disabled={terminatedSessions.has(a.user)} style={{
+                      padding: '6px 12px', fontSize: 11, fontWeight: 600, border: 'none', borderRadius: 6, cursor: terminatedSessions.has(a.user) ? 'default' : 'pointer',
+                      background: terminatedSessions.has(a.user) ? T.gray100 : T.redBg,
+                      color: terminatedSessions.has(a.user) ? T.gray400 : T.red,
+                      opacity: terminatedSessions.has(a.user) ? 0.7 : 1,
+                    }}>
+                      {terminatedSessions.has(a.user) ? 'Terminated' : 'Terminate Session'}
+                    </button>
                   </div>
                   <span style={{ color: T.gray400, fontSize: 12, transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
                 </div>

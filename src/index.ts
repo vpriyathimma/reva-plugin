@@ -101,6 +101,10 @@ app.use('/api', testIdjagRouter);
 import { hitlRouter } from './api/hitlConfig';
 app.use('/api', hitlRouter);
 
+// Session control routes
+import { sessionControlRouter } from './api/sessionControl';
+app.use('/api', sessionControlRouter);
+
 // ── Health ────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'reva-plugin', timestamp: new Date().toISOString() });

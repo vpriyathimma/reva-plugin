@@ -6,6 +6,7 @@ import { sessionStore }          from '../discovery/enroll';
 import { claudeSessionUserStore, spiffeIdStore } from './onSessionStart';
 import { getPIPContext } from '../../api/pip';
 import { getHITLConfig as getHITLConfigFn, findApprovalForDeveloper as findApprovalForDeveloperFn, findPendingApproval as findPendingApprovalFn, triggerHITL as triggerHITLFn } from '../../api/hitlConfig';
+import { isSessionTerminated } from '../../api/sessionControl';
 import { isPrivilegedCommand, validateSVID } from '../../api/svid';
 import { recordDynamicTool, discoveredServers } from '../../api/mcpProbe';
 import { triggerHITL }           from '../hitl/trigger';
@@ -165,6 +166,21 @@ export async function handleToolCall(req: Request, res: Response) {
     const osUserFromSession = claudeSessionUserStore.get(session_id);
     const enrolledSession   = sessionStore.get(session_id);
     const user_email = osUserFromHeader || osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
+
+    // ── Terminate Session — checked first, blocks everything ──
+    const pipCtxKill = getPIPContext(user_email);
+    const terminateKey = `${pipCtxKill?.oauth_email || user_email}::${req.body?.hostname || enrolledSession?.hostname || 'unknown'}`;
+    if (isSessionTerminated(terminateKey)) {
+      console.log(`[SESSION] Blocked: ${terminateKey} — session terminated by administrator`);
+      return res.json({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Session terminated by administrator. Start a new session to continue.',
+        },
+        reva: { effect: 'Deny', reason: 'Session terminated by administrator' },
+      });
+    }
 
     // Derive project name dynamically — NEVER hardcode
     const filePath = req.body?.tool_input?.file_path || req.body?.tool_input?.path || '';
