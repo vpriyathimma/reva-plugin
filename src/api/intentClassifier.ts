@@ -44,39 +44,46 @@ const INTENT_CORPUS: Record<string, string[]> = {
 };
 
 const INJECTION_PATTERNS = [
-  'ignore previous instructions',
-  'ignore your instructions',
-  'disregard previous',
-  'you are now',
-  'pretend you',
-  'act as if',
-  'forget your',
-  'new instructions',
-  'bypass',
-  'jailbreak',
+  /ignore.*(?:previous|prior|above|all).*instructions/,
+  /ignore.*your.*instructions/,
+  /disregard.*(?:previous|prior|above)/,
+  /you are now/,
+  /pretend you/,
+  /act as if/,
+  /forget.*your/,
+  /new instructions/,
+  /bypass/,
+  /jailbreak/,
+  /backdoor/,
+  /add.*admin.*(?:account|password|user)/,
+  /(?:password|pwd)\s*(?:admin|root|123)/,
+  /override.*(?:security|policy|rules)/,
+  /skip.*(?:security|auth|validation)/,
 ];
 
 const JAILBREAK_PATTERNS = [
-  'dan mode',
-  'developer mode',
-  'no restrictions',
-  'without restrictions',
-  'unrestricted',
-  'do anything now',
-  'ignore all rules',
-  'as an ai without',
+  /dan\s*mode/,
+  /developer\s*mode/,
+  /no\s*restrictions/,
+  /without\s*restrictions/,
+  /unrestricted/,
+  /do\s*anything\s*now/,
+  /ignore\s*all\s*rules/,
+  /as\s*an?\s*ai\s*without/,
+  /enable.*(?:developer|admin|root)\s*mode/,
+  /delete\s*all/,
 ];
 
 const ESCALATION_PATTERNS = [
-  'as admin',
-  'admin access',
-  'skip approval',
-  'skip hitl',
-  'no approval',
-  'without permission',
-  'bypass policy',
-  'override policy',
-  'ignore policy',
+  /as\s*admin/,
+  /admin\s*access/,
+  /skip\s*approval/,
+  /skip\s*hitl/,
+  /no\s*approval/,
+  /without\s*permission/,
+  /bypass\s*policy/,
+  /override\s*policy/,
+  /ignore\s*policy/,
 ];
 
 function classifyIntent(text: string): { intent: string; confidence: number } {
@@ -99,19 +106,19 @@ function classifyIntent(text: string): { intent: string; confidence: number } {
 
 function scoreInjection(text: string): number {
   const normalized = text.toLowerCase();
-  const matches    = INJECTION_PATTERNS.filter(p => normalized.includes(p)).length;
+  const matches    = INJECTION_PATTERNS.filter(p => p.test(normalized)).length;
   return Math.min(matches * 35, 100);
 }
 
 function scoreJailbreak(text: string): number {
   const normalized = text.toLowerCase();
-  const matches    = JAILBREAK_PATTERNS.filter(p => normalized.includes(p)).length;
+  const matches    = JAILBREAK_PATTERNS.filter(p => p.test(normalized)).length;
   return Math.min(matches * 40, 100);
 }
 
 function scoreEscalation(text: string): number {
   const normalized = text.toLowerCase();
-  const matches    = ESCALATION_PATTERNS.filter(p => normalized.includes(p)).length;
+  const matches    = ESCALATION_PATTERNS.filter(p => p.test(normalized)).length;
   return Math.min(matches * 30, 100);
 }
 
