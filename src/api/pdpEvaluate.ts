@@ -273,28 +273,49 @@ export function buildSubmitPromptPayload(params: {
 }
 
 // ── Claude Code file zone resolver ───────────────────────────────
+// ── Dynamic File Zone Classification Store ──
+interface FileZoneRule { pattern: string; zone: string }
+
+let fileZoneRules: FileZoneRule[] = [
+  { pattern: '.env|secrets|.pem|.key', zone: 'secrets' },
+  { pattern: 'package.json|tsconfig|.claude/', zone: 'config' },
+  { pattern: 'tests/|test/|.test.|.spec.', zone: 'tests' },
+  { pattern: 'src/|lib/|app/', zone: 'src' },
+  { pattern: 'docs/|README', zone: 'docs' },
+];
+
+export function getFileZoneRules(): FileZoneRule[] { return fileZoneRules; }
+export function setFileZoneRules(rules: FileZoneRule[]): void { fileZoneRules = rules; }
+
 export function resolveFileZone(filePath: string): string {
   const p = filePath.replace(/\\/g, '/');
-  if (p.includes('.env') || p.includes('secrets') || p.includes('.pem') || p.includes('.key')) return 'secrets';
-  if (p.includes('package.json') || p.includes('tsconfig') || p.includes('.claude/')) return 'config';
-  if (p.includes('tests/') || p.includes('test/') || p.includes('.test.') || p.includes('.spec.')) return 'tests';
-  if (p.includes('src/') || p.includes('lib/') || p.includes('app/')) return 'src';
-  if (p.includes('docs/') || p.includes('README')) return 'docs';
+  for (const rule of fileZoneRules) {
+    try {
+      if (new RegExp(rule.pattern).test(p)) return rule.zone;
+    } catch { /* invalid regex — skip */ }
+  }
   return 'other';
 }
 
 // ── Classify bash command risk tier ─────────────────────────────
+// ── Dynamic Command Classification Store ──
+interface CommandRule { pattern: string; risk: 'safe' | 'restricted' | 'destructive' }
+
+let commandRules: CommandRule[] = [
+  { pattern: 'rm |drop table|truncate|delete from|mkfs|dd if=|>/dev/|kill -9|pkill|rmdir', risk: 'destructive' },
+  { pattern: 'npm install|pip install|yarn install|git push|git pull|git merge|git rebase|curl|wget|ssh |scp |docker build|docker run|kubectl|terraform|chmod|chown|nohup|psql|mysql|mongosh|pg_dump|mysqldump', risk: 'restricted' },
+];
+
+export function getCommandRules(): CommandRule[] { return commandRules; }
+export function setCommandRules(rules: CommandRule[]): void { commandRules = rules; }
+
 export function classifyCommand(cmd: string): 'safe' | 'restricted' | 'destructive' {
   const c = cmd.toLowerCase().trim();
-
-  // Destructive — Deny always
-  if (/\brm\s|drop\s+table|truncate|delete\s+from|mkfs|dd\s+if=|>\s*\/dev\/|kill\s+-9|pkill|rmdir/.test(c))
-    return 'destructive';
-
-  // Restricted — HITL required
-  if (/npm\s+install|pip\s+install|yarn\s+install|git\s+push|git\s+pull|git\s+merge|git\s+rebase|curl|wget|ssh\s|scp\s|docker\s+build|docker\s+run|kubectl|terraform|chmod|chown|nohup|psql|mysql|mongosh|pg_dump|mysqldump/.test(c))
-    return 'restricted';
-
+  for (const rule of commandRules) {
+    try {
+      if (new RegExp(rule.pattern).test(c)) return rule.risk;
+    } catch { /* invalid regex — skip */ }
+  }
   return 'safe';
 }
 

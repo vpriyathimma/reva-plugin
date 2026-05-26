@@ -890,6 +890,32 @@ function AdminConfig() {
     { pattern: '*', zone: 'other' },
   ]);
 
+  // Load classification from server
+  useEffect(() => {
+    fetchJSON('/api/config/commands').then((data: any) => {
+      if (data.rules?.length) setCommands([...data.rules, { pattern: '*', risk: 'safe' }]);
+    }).catch(() => {});
+    fetchJSON('/api/config/filezones').then((data: any) => {
+      if (data.rules?.length) setZones([...data.rules, { pattern: '*', zone: 'other' }]);
+    }).catch(() => {});
+  }, []);
+
+  const [classifStatus, setClassifStatus] = useState('');
+  const saveClassification = async () => {
+    try {
+      await fetch('/api/config/commands', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules: commands.filter(c => c.pattern !== '*') }),
+      });
+      await fetch('/api/config/filezones', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules: zones.filter(z => z.pattern !== '*') }),
+      });
+      setClassifStatus('saved');
+      setTimeout(() => setClassifStatus(''), 2000);
+    } catch { setClassifStatus('error'); }
+  };
+
   const [editingCmd, setEditingCmd] = useState<number | null>(null);
   const [editingZone, setEditingZone] = useState<number | null>(null);
   const [addingCmd, setAddingCmd] = useState(false);
@@ -1175,6 +1201,12 @@ function AdminConfig() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Save Classification */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, marginBottom: 40 }}>
+        {classifStatus === 'saved' && <span style={{ fontSize: 11, color: T.green }}>✓ Classification saved — active immediately</span>}
+        <button onClick={saveClassification} style={btnPrimary}>Save Classification</button>
       </div>
 
       {/* Policy Suggestion Engine */}

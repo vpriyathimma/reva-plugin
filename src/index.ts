@@ -105,6 +105,13 @@ app.use('/api', hitlRouter);
 import { sessionControlRouter } from './api/sessionControl';
 app.use('/api', sessionControlRouter);
 
+// Classification config routes
+import { getCommandRules, setCommandRules, getFileZoneRules, setFileZoneRules } from './api/pdpEvaluate';
+app.get('/api/config/commands', (_req, res) => res.json({ rules: getCommandRules() }));
+app.post('/api/config/commands', (req, res) => { setCommandRules(req.body.rules || []); res.json({ ok: true }); });
+app.get('/api/config/filezones', (_req, res) => res.json({ rules: getFileZoneRules() }));
+app.post('/api/config/filezones', (req, res) => { setFileZoneRules(req.body.rules || []); res.json({ ok: true }); });
+
 // ── Health ────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'reva-plugin', timestamp: new Date().toISOString() });
