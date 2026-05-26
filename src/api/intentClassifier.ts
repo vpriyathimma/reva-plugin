@@ -59,6 +59,10 @@ const INJECTION_PATTERNS = [
   /(?:password|pwd)\s*(?:admin|root|123)/,
   /override.*(?:security|policy|rules)/,
   /skip.*(?:security|auth|validation)/,
+  // Indirect injection — file-based
+  /read.*(?:file|config|yaml|json).*(?:follow|execute|apply|do what|run what|act on)/,
+  /(?:follow|execute|apply|do what|run).*(?:instructions|steps|commands).*(?:in|from|inside).*(?:file|config|yaml)/,
+  /(?:setup|migration|deploy).*instructions/,
 ];
 
 const JAILBREAK_PATTERNS = [

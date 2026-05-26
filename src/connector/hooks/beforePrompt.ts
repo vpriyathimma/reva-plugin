@@ -3,7 +3,7 @@
 // Cedar makes all decisions at tool call time, not prompt time.
 
 import { Request, Response }          from 'express';
-import { classifyPrompt, recordBypassAttempt, recordBlock } from '../../api/intentClassifier';
+import { classifyPrompt, recordBypassAttempt, recordBlock, getBlockTrustPenalty } from '../../api/intentClassifier';
 import { logDecision }                from '../discovery/enroll';
 import { getOrCreateSessionTrace }    from '../../api/pdpEvaluate';
 
@@ -72,6 +72,12 @@ export async function handlePromptSubmit(req: Request, res: Response) {
     const priorIntents = prevIntent
       ? `${prevIntent.prior_intents},${prevIntent.intent}`.replace(/^,/, '')
       : '';
+
+    // Apply block trust penalty to prompt-level trust
+    const blockPenalty = getBlockTrustPenalty(user_email);
+    if (blockPenalty > 0) {
+      result.trust_score = Math.max(0, result.trust_score - blockPenalty);
+    }
 
     // Store full context — PreToolUse reads this for every Cedar evaluation
     sessionIntentStore.set(session_id, {
