@@ -208,6 +208,14 @@ export async function handleSessionStart(req: Request, res: Response) {
       hostnameStore.set(os_user, hostname);
     }
 
+    // Clear any existing terminate for this developer+machine (new session = fresh start)
+    const termOauthEmail = (body.claude_context as any)?.email || '';
+    if (termOauthEmail && hostname) {
+      const { restoreSession } = require('../../api/sessionControl');
+      const termKey = `${termOauthEmail}::${hostname}`;
+      restoreSession(termKey);
+    }
+
     // Store SPIFFE ID for subsequent hooks (PreToolUse, PostToolUse)
     if (spiffe_id) {
       spiffeIdStore.set(session_id, spiffe_id);
