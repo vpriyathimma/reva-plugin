@@ -289,7 +289,7 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
           {agents.map(a => {
             const isOnline = Date.now() - new Date(a.lastSeen).getTime() < onlineThreshold;
             const denyRate = a.totalDecisions > 0 ? Math.round((a.denyCount / a.totalDecisions) * 100) : 0;
-            const agentBlocks = a.sessions.flatMap(s => blockData[s.session_id] || []);
+            const agentBlocks = blockData[a.os_user_name] || [];
             const blockedCount = agentBlocks.length;
             const isExpanded = expandedAgent === a.user;
             return (

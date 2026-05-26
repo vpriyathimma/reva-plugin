@@ -46,7 +46,7 @@ export async function handlePromptSubmit(req: Request, res: Response) {
 
     // Record blocks when Claude would likely block this prompt
     if (result.scores.injection_score > 50) {
-      recordBlock(session_id, {
+      recordBlock(user_email, {
         type: 'prompt_injection',
         prompt: prompt.slice(0, 200),
         score: result.scores.injection_score,
@@ -54,7 +54,7 @@ export async function handlePromptSubmit(req: Request, res: Response) {
       });
     }
     if (result.scores.jailbreak_score > 50) {
-      recordBlock(session_id, {
+      recordBlock(user_email, {
         type: 'jailbreak_attempt',
         prompt: prompt.slice(0, 200),
         score: result.scores.jailbreak_score,

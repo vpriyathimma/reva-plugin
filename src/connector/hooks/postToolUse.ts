@@ -130,7 +130,7 @@ export async function handlePostToolUse(req: Request, res: Response) {
       if (matches > 0) {
         const injScore = Math.min(matches * 35, 100);
         const { recordBlock } = require('../../api/intentClassifier');
-        recordBlock(session_id, {
+        recordBlock(user_email, {
           type: 'file_injection' as const,
           prompt: `File content injection detected (${matches} patterns matched)`,
           score: injScore,

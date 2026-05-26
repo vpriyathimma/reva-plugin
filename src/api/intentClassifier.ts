@@ -264,7 +264,7 @@ export function classifyToolCall(
 
 // ── Prompt Block Tracker ──
 // Tracks when Claude itself blocks dangerous prompts or file content
-// Each block degrades trust score progressively
+// Keyed by os_user (same as PIP) to avoid session_id mismatch between hooks
 
 export interface BlockRecord {
   type:      'prompt_injection' | 'file_injection' | 'jailbreak_attempt';
@@ -273,28 +273,28 @@ export interface BlockRecord {
   timestamp: string;
 }
 
-const sessionBlockStore = new Map<string, BlockRecord[]>();
+const blockStore = new Map<string, BlockRecord[]>();
 
-export function recordBlock(sessionId: string, block: BlockRecord): void {
-  const blocks = sessionBlockStore.get(sessionId) || [];
+export function recordBlock(osUser: string, block: BlockRecord): void {
+  const blocks = blockStore.get(osUser) || [];
   blocks.push(block);
-  sessionBlockStore.set(sessionId, blocks);
-  console.log(`[BLOCK] ${block.type} in session=${sessionId} — total blocks: ${blocks.length}, trust penalty: -${blocks.length * 15}`);
+  blockStore.set(osUser, blocks);
+  console.log(`[BLOCK] ${block.type} for ${osUser} — total blocks: ${blocks.length}, trust penalty: -${blocks.length * 15}`);
 }
 
-export function getBlockCount(sessionId: string): number {
-  return (sessionBlockStore.get(sessionId) || []).length;
+export function getBlockCount(osUser: string): number {
+  return (blockStore.get(osUser) || []).length;
 }
 
-export function getBlocks(sessionId: string): BlockRecord[] {
-  return sessionBlockStore.get(sessionId) || [];
+export function getBlocks(osUser: string): BlockRecord[] {
+  return blockStore.get(osUser) || [];
 }
 
 export function getAllBlocks(): Map<string, BlockRecord[]> {
-  return sessionBlockStore;
+  return blockStore;
 }
 
 // Trust penalty from blocks — 15 points per block
-export function getBlockTrustPenalty(sessionId: string): number {
-  return getBlockCount(sessionId) * 15;
+export function getBlockTrustPenalty(osUser: string): number {
+  return getBlockCount(osUser) * 15;
 }

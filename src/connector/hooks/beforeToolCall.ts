@@ -231,7 +231,7 @@ export async function handleToolCall(req: Request, res: Response) {
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
 
     // Apply block trust penalty — each prompt/file injection block reduces trust by 15
-    const blockPenalty = getBlockTrustPenalty(session_id);
+    const blockPenalty = getBlockTrustPenalty(user_email);
     if (blockPenalty > 0) {
       result.trust_score = Math.max(0, result.trust_score - blockPenalty);
     }
