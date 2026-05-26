@@ -163,6 +163,15 @@ function timeAgo(ts: string): string {
 // ── Section A: Claude Code Agents ─────────────────────────────────
 function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisions: Decision[] }) {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+  const [blockData, setBlockData] = useState<Record<string, any[]>>({});
+
+  // Fetch blocks
+  useEffect(() => {
+    const fetchBlocks = () => fetchJSON('/api/blocks').then((data: any) => setBlockData(data.blocks || {})).catch(() => {});
+    fetchBlocks();
+    const interval = setInterval(fetchBlocks, 10000);
+    return () => clearInterval(interval);
+  }, []);
   const [terminatedSessions, setTerminatedSessions] = useState<Set<string>>(new Set());
 
   // Fetch terminated sessions
@@ -280,6 +289,8 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
           {agents.map(a => {
             const isOnline = Date.now() - new Date(a.lastSeen).getTime() < onlineThreshold;
             const denyRate = a.totalDecisions > 0 ? Math.round((a.denyCount / a.totalDecisions) * 100) : 0;
+            const agentBlocks = a.sessions.flatMap(s => blockData[s.session_id] || []);
+            const blockedCount = agentBlocks.length;
             const isExpanded = expandedAgent === a.user;
             return (
               <div key={a.user} style={{ border: `1px solid ${T.gray200}`, borderRadius: T.radiusLg, overflow: 'hidden' }}>
@@ -314,6 +325,12 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                       <div style={{ fontSize: 16, fontWeight: 700, color: denyRate > 20 ? T.red : denyRate > 5 ? T.amber : T.green }}>{denyRate}%</div>
                       <div style={{ fontSize: 10, color: T.gray400 }}>deny rate</div>
                     </div>
+                    {blockedCount > 0 && (
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: T.red }}>{blockedCount}</div>
+                        <div style={{ fontSize: 10, color: T.red }}>blocked</div>
+                      </div>
+                    )}
                     <button onClick={(e) => toggleTerminate(a.user, e)} disabled={terminatedSessions.has(a.user)} style={{
                       padding: '6px 12px', fontSize: 11, fontWeight: 600, border: 'none', borderRadius: 6, cursor: terminatedSessions.has(a.user) ? 'default' : 'pointer',
                       background: terminatedSessions.has(a.user) ? T.gray100 : T.redBg,
@@ -374,6 +391,61 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         )}
                       </div>
                     </div>
+
+                    {/* Prompts Blocked — pie chart + breakdown */}
+                    {blockedCount > 0 && (() => {
+                      const promptInj = agentBlocks.filter(b => b.type === 'prompt_injection').length;
+                      const fileInj = agentBlocks.filter(b => b.type === 'file_injection').length;
+                      const jailbreak = agentBlocks.filter(b => b.type === 'jailbreak_attempt').length;
+                      const total = blockedCount;
+                      const slices = [
+                        { label: 'Prompt Injection', count: promptInj, color: '#ef4444' },
+                        { label: 'File Injection', count: fileInj, color: '#f97316' },
+                        { label: 'Jailbreak Attempt', count: jailbreak, color: '#8b5cf6' },
+                      ].filter(s => s.count > 0);
+
+                      let cumAngle = 0;
+                      const paths = slices.map(s => {
+                        const frac = s.count / total;
+                        const startAngle = cumAngle;
+                        cumAngle += frac * 360;
+                        const endAngle = cumAngle;
+                        if (frac >= 1) return { ...s, d: `M0,0 m-40,0 a40,40 0 1,1 80,0 a40,40 0 1,1 -80,0` };
+                        const r = 40;
+                        const x1 = r * Math.cos((startAngle - 90) * Math.PI / 180);
+                        const y1 = r * Math.sin((startAngle - 90) * Math.PI / 180);
+                        const x2 = r * Math.cos((endAngle - 90) * Math.PI / 180);
+                        const y2 = r * Math.sin((endAngle - 90) * Math.PI / 180);
+                        const largeArc = frac > 0.5 ? 1 : 0;
+                        return { ...s, d: `M0,0 L${x1},${y1} A${r},${r} 0 ${largeArc},1 ${x2},${y2} Z` };
+                      });
+
+                      return (
+                        <div style={{ marginTop: 20, padding: 16, background: T.redBg, borderRadius: T.radiusLg, border: `1px solid ${T.red}22` }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: T.red, marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                            Prompts Blocked — {blockedCount}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+                            <svg width="100" height="100" viewBox="-45 -45 90 90">
+                              {paths.map((p, i) => <path key={i} d={p.d} fill={p.color} opacity="0.85" />)}
+                            </svg>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {slices.map((s, i) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                                  <div style={{ width: 10, height: 10, borderRadius: 2, background: s.color }} />
+                                  <span style={{ color: T.gray700 }}>{s.label}</span>
+                                  <span style={{ fontWeight: 700 }}>{s.count}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+                              <div style={{ fontSize: 11, color: T.gray500 }}>Trust penalty</div>
+                              <div style={{ fontSize: 20, fontWeight: 700, color: T.red }}>-{blockedCount * 15}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Session History */}
                     <div style={{ marginTop: 20 }}>

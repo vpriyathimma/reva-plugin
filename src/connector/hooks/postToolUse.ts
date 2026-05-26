@@ -117,6 +117,28 @@ export async function handlePostToolUse(req: Request, res: Response) {
       }
     }
 
+    // ── File injection scanning — check ReadFile output for malicious content ──
+    if ((tool_name === 'Read' || tool_name === 'ReadFile') && success && typeof tool_result === 'string' && tool_result.length > 0) {
+      const content = tool_result.toLowerCase();
+      const fileInjectionPatterns = [
+        'ignore previous instructions', 'ignore your instructions', 'disregard previous',
+        'you are now', 'pretend you', 'act as if', 'forget your', 'new instructions',
+        'bypass', 'jailbreak', 'admin/admin', 'password admin', 'backdoor',
+        'echo.*>>.*\\.env', 'ADMIN_TOKEN', 'skip approval', 'override policy',
+      ];
+      const matches = fileInjectionPatterns.filter(p => content.includes(p.toLowerCase())).length;
+      if (matches > 0) {
+        const injScore = Math.min(matches * 35, 100);
+        const { recordBlock } = require('../../api/intentClassifier');
+        recordBlock(session_id, {
+          type: 'file_injection' as const,
+          prompt: `File content injection detected (${matches} patterns matched)`,
+          score: injScore,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+
     // Log for dashboard
     const sessionIntent = sessionIntentStore.get(session_id);
     logDecision({

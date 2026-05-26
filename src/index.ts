@@ -107,10 +107,17 @@ app.use('/api', sessionControlRouter);
 
 // Classification config routes
 import { getCommandRules, setCommandRules, getFileZoneRules, setFileZoneRules } from './api/pdpEvaluate';
+import { getAllBlocks } from './api/intentClassifier';
 app.get('/api/config/commands', (_req, res) => res.json({ rules: getCommandRules() }));
 app.post('/api/config/commands', (req, res) => { setCommandRules(req.body.rules || []); res.json({ ok: true }); });
 app.get('/api/config/filezones', (_req, res) => res.json({ rules: getFileZoneRules() }));
 app.post('/api/config/filezones', (req, res) => { setFileZoneRules(req.body.rules || []); res.json({ ok: true }); });
+app.get('/api/blocks', (_req, res) => {
+  const allBlocks = getAllBlocks();
+  const result: Record<string, any[]> = {};
+  for (const [sid, blocks] of allBlocks) { result[sid] = blocks; }
+  res.json({ blocks: result });
+});
 
 // ── Health ────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {

@@ -1,5 +1,6 @@
 import { Request, Response }     from 'express';
 import { classifyToolCall }      from '../../api/intentClassifier';
+import { getBlockTrustPenalty, getBlocks, getBlockCount } from '../../api/intentClassifier';
 import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
@@ -228,6 +229,12 @@ export async function handleToolCall(req: Request, res: Response) {
     const derivedAgentType = (!isSpawnAgent && isSubagentActive(session_id)) ? 'subagent' : 'main';
 
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
+
+    // Apply block trust penalty — each prompt/file injection block reduces trust by 15
+    const blockPenalty = getBlockTrustPenalty(session_id);
+    if (blockPenalty > 0) {
+      result.trust_score = Math.max(0, result.trust_score - blockPenalty);
+    }
 
     // HITL key includes command hash so each unique command requires its own approval
     const rawCommand   = req.body?.tool_input?.command || '';

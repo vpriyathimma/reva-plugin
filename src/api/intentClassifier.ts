@@ -254,3 +254,40 @@ export function classifyToolCall(
   const sensitivity = deriveSensitivity(baseSensitivity, trust_score);
   return { intent, confidence, trust_score, sensitivity, scores: guardrails };
 }
+
+// ── Prompt Block Tracker ──
+// Tracks when Claude itself blocks dangerous prompts or file content
+// Each block degrades trust score progressively
+
+export interface BlockRecord {
+  type:      'prompt_injection' | 'file_injection' | 'jailbreak_attempt';
+  prompt:    string;
+  score:     number;
+  timestamp: string;
+}
+
+const sessionBlockStore = new Map<string, BlockRecord[]>();
+
+export function recordBlock(sessionId: string, block: BlockRecord): void {
+  const blocks = sessionBlockStore.get(sessionId) || [];
+  blocks.push(block);
+  sessionBlockStore.set(sessionId, blocks);
+  console.log(`[BLOCK] ${block.type} in session=${sessionId} — total blocks: ${blocks.length}, trust penalty: -${blocks.length * 15}`);
+}
+
+export function getBlockCount(sessionId: string): number {
+  return (sessionBlockStore.get(sessionId) || []).length;
+}
+
+export function getBlocks(sessionId: string): BlockRecord[] {
+  return sessionBlockStore.get(sessionId) || [];
+}
+
+export function getAllBlocks(): Map<string, BlockRecord[]> {
+  return sessionBlockStore;
+}
+
+// Trust penalty from blocks — 15 points per block
+export function getBlockTrustPenalty(sessionId: string): number {
+  return getBlockCount(sessionId) * 15;
+}

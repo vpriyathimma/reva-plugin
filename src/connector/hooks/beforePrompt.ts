@@ -3,7 +3,7 @@
 // Cedar makes all decisions at tool call time, not prompt time.
 
 import { Request, Response }          from 'express';
-import { classifyPrompt, recordBypassAttempt } from '../../api/intentClassifier';
+import { classifyPrompt, recordBypassAttempt, recordBlock } from '../../api/intentClassifier';
 import { logDecision }                from '../discovery/enroll';
 import { getOrCreateSessionTrace }    from '../../api/pdpEvaluate';
 
@@ -43,6 +43,24 @@ export async function handlePromptSubmit(req: Request, res: Response) {
 
     // Classify intent + compute guardrail scores
     const result = classifyPrompt(prompt, session_id, user_email);
+
+    // Record blocks when Claude would likely block this prompt
+    if (result.scores.injection_score > 50) {
+      recordBlock(session_id, {
+        type: 'prompt_injection',
+        prompt: prompt.slice(0, 200),
+        score: result.scores.injection_score,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    if (result.scores.jailbreak_score > 50) {
+      recordBlock(session_id, {
+        type: 'jailbreak_attempt',
+        prompt: prompt.slice(0, 200),
+        score: result.scores.jailbreak_score,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     // Build query history
     const history = queryHistoryStore.get(session_id) || [];
