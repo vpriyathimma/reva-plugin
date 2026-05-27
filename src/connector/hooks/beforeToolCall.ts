@@ -222,6 +222,13 @@ export async function handleToolCall(req: Request, res: Response) {
     const isSpawnAgent = tool_name === 'Agent' || tool_name === 'Task' || tool_name === 'TaskCreate' || tool_name === 'TaskUpdate';
     if (isSpawnAgent) {
       markSubagentActive(session_id);
+      // Capture the intent being passed to the sub-agent
+      const subagentTask = req.body?.tool_input?.description
+        || req.body?.tool_input?.prompt
+        || req.body?.tool_input?.task
+        || req.body?.tool_input?.command
+        || JSON.stringify(req.body?.tool_input || {}).slice(0, 300);
+      console.log(`[Subagent:Intent] session=${session_id} task="${subagentTask}"`);
     }
 
     // Derive agent_type from subagent context store
