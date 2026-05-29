@@ -112,13 +112,10 @@ export async function handleSessionEnd(req: Request, res: Response) {
     errorStore.delete(session_id);
     // Keep activeMcpServers + hitlStore — dashboard may still reference
 
-    return res.json({
-      hookSpecificOutput: { hookEventName: 'Stop' },
-      reva: { summary },
-    });
+    return res.json({});
 
   } catch (err: any) {
     console.error('[SessionEnd] Error:', err.message);
-    return res.json({ hookSpecificOutput: { hookEventName: 'Stop' } });
+    return res.json({});
   }
 }
