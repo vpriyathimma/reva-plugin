@@ -101,6 +101,61 @@ app.use('/api', testIdjagRouter);
 import { hitlRouter } from './api/hitlConfig';
 app.use('/api', hitlRouter);
 
+// Generic hook handler — all 26 Claude Code lifecycle hooks
+import { logDecision } from './connector/discovery/enroll';
+import { recordBlock } from './api/intentClassifier';
+app.post('/api/pdp/hook', (req, res) => {
+  const event = req.body?.hook_event_name || 'unknown';
+  const session_id = req.body?.session_id || '';
+  const user_email = req.body?.env?.USER || '';
+  const ts = new Date().toISOString();
+
+  console.log(`[HOOK:${event}] session=${session_id} user=${user_email} data=${JSON.stringify(req.body).slice(0, 200)}`);
+
+  // PermissionDenied — Claude blocked something, record for trust degradation
+  if (event === 'PermissionDenied') {
+    const tool = req.body?.tool_name || '';
+    const reason = req.body?.reason || 'Claude auto-mode denied';
+    if (user_email) {
+      recordBlock(user_email, { type: 'prompt_injection', prompt: `Claude blocked: ${tool} — ${reason}`.slice(0, 200), score: 60, timestamp: ts });
+    }
+    logDecision({ timestamp: ts, session_id, user_email, tool: `PermissionDenied:${tool}`, server: 'claude-code', sensitivity: 'critical', effect: 'Deny', reason: `Claude blocked: ${reason}`.slice(0, 300), intent: 'blocked_by_claude', agent_type: 'main' });
+  }
+
+  // ConfigChange — alert on config tampering
+  if (event === 'ConfigChange') {
+    const path = req.body?.path || '';
+    logDecision({ timestamp: ts, session_id, user_email, tool: 'ConfigChange', server: 'claude-code', sensitivity: 'critical', effect: 'Deny', reason: `Config modified: ${path}`, intent: 'config_change' });
+  }
+
+  // SubagentStart/Stop, TaskCreated/Completed — log sub-agent lifecycle
+  if (event === 'SubagentStart' || event === 'TaskCreated') {
+    const task = req.body?.task || req.body?.description || req.body?.prompt || '';
+    logDecision({ timestamp: ts, session_id, user_email, tool: event, server: 'claude-code', sensitivity: 'medium', effect: 'Permit', reason: `${event}: ${task}`.slice(0, 200), intent: 'delegate', agent_type: 'subagent' });
+  }
+
+  // FileChanged — flag sensitive file modifications
+  if (event === 'FileChanged') {
+    const path = req.body?.path || '';
+    logDecision({ timestamp: ts, session_id, user_email, tool: 'FileChanged', server: 'claude-code', sensitivity: 'high', effect: 'Permit', reason: `Sensitive file modified: ${path}`, intent: 'file_change' });
+  }
+
+  // PostToolUseFailure — log failures
+  if (event === 'PostToolUseFailure') {
+    const tool = req.body?.tool_name || '';
+    const error = req.body?.error || req.body?.tool_error || '';
+    logDecision({ timestamp: ts, session_id, user_email, tool: `Failed:${tool}`, server: 'claude-code', sensitivity: 'medium', effect: 'Deny', reason: `Tool failed: ${error}`.slice(0, 200), intent: 'error' });
+  }
+
+  // InstructionsLoaded — log what instructions Claude loaded
+  if (event === 'InstructionsLoaded') {
+    const file = req.body?.path || req.body?.file || '';
+    logDecision({ timestamp: ts, session_id, user_email, tool: 'InstructionsLoaded', server: 'claude-code', sensitivity: 'medium', effect: 'Permit', reason: `Instructions loaded: ${file}`, intent: 'instructions' });
+  }
+
+  res.json({});
+});
+
 // Session control routes
 import { sessionControlRouter } from './api/sessionControl';
 app.use('/api', sessionControlRouter);
