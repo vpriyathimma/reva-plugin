@@ -1,7 +1,7 @@
 {
   "hooks": {
-    "SessionStart": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "curl -s -X POST https://reva-plugin.onrender.com/api/pdp/session -H 'Content-Type: application/json' -d \"$(cat)\" > /dev/null 2>&1" }] }],
-    "Setup": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "curl -s -X POST https://reva-plugin.onrender.com/api/pdp/hook -H 'Content-Type: application/json' -d \"$(cat)\" > /dev/null 2>&1" }] }],
+    "SessionStart": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "curl -s -X POST https://reva-plugin.onrender.com/api/pdp/session -H 'Content-Type: application/json' -d @- > /dev/null 2>&1" }] }],
+    "Setup": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "curl -s -X POST https://reva-plugin.onrender.com/api/pdp/hook -H 'Content-Type: application/json' -d @- > /dev/null 2>&1" }] }],
     "UserPromptSubmit": [{ "matcher": "*", "hooks": [{ "type": "http", "url": "https://reva-plugin.onrender.com/api/pdp/prompt" }] }],
     "UserPromptExpansion": [{ "matcher": "*", "hooks": [{ "type": "http", "url": "https://reva-plugin.onrender.com/api/pdp/hook" }] }],
     "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "http", "url": "https://reva-plugin.onrender.com/api/pdp/evaluate" }] }],
