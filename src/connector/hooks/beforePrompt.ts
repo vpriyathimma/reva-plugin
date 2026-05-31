@@ -5,7 +5,7 @@
 import { Request, Response }          from 'express';
 import { classifyPrompt, recordBypassAttempt, recordBlock, getBlockTrustPenalty } from '../../api/intentClassifier';
 import { logDecision }                from '../discovery/enroll';
-import { getOrCreateSessionTrace }    from '../../api/pdpEvaluate';
+import { getOrCreateSessionTrace, evaluateCedar, buildClaudeCodeInjectionPayload } from '../../api/pdpEvaluate';
 
 import { subagentContextStore } from './beforeToolCall';
 
@@ -104,24 +104,72 @@ export async function handlePromptSubmit(req: Request, res: Response) {
       console.log(`[Subagent] Context reset for session=${session_id} on new prompt`);
     }
 
-    // Log classification (not a Cedar decision — just context capture)
-    logDecision({
-      timestamp:      new Date().toISOString(),
-      session_id,
-      user_email,
-      tool:           'prompt',
-      server:         'claude-code',
-      sensitivity:    result.sensitivity,
-      effect:         'Permit',
-      reason:         'Prompt classified — enforcement deferred to PreToolUse',
-      intent:         result.intent,
-      trust_score:    result.trust_score,
-      scores:         result.scores,
-      prompt:         prompt.slice(0, 200),
-      agent_type:     'main',
-      command_risk:   '',
-      file_zone:      '',
-    });
+    // Phase 1 — exception-only SubmitPrompt.
+    // Route injection/jailbreak through Cedar so the deny is recorded in the
+    // decision logs (with full prompt + prompt_history). The prompt is NEVER
+    // erased here — enforcement of effects still happens at PreToolUse. Clean
+    // prompts skip Cedar entirely and keep the original classify-only log.
+    const isInjection = result.scores.injection_score > 50;
+    const isJailbreak = result.scores.jailbreak_score > 50;
+
+    if (isInjection || isJailbreak) {
+      const detection   = isInjection ? 'prompt_injection' : 'jailbreak_attempt';
+      const projectName = (req.body.project_name as string) || 'unknown';
+      let cedarResult;
+      try {
+        cedarResult = await evaluateCedar(buildClaudeCodeInjectionPayload({
+          osUser:        user_email,
+          projectName,
+          sessionId:     session_id,
+          prompt,
+          promptHistory: history.slice(-3),
+          isInjection,
+          isJailbreak,
+          scores:        result.scores,
+          trustScore:    result.trust_score,
+        }));
+      } catch (e: any) {
+        console.error('[Prompt:Cedar] SubmitPrompt eval failed:', e.message);
+      }
+
+      logDecision({
+        timestamp:      new Date().toISOString(),
+        session_id,
+        user_email,
+        tool:           'prompt',
+        server:         'claude-code',
+        sensitivity:    result.sensitivity,
+        effect:         cedarResult && cedarResult.decision === 'allow' ? 'Permit' : 'Deny',
+        reason:         (cedarResult && cedarResult.policy_name) || detection,
+        intent:         result.intent,
+        trust_score:    result.trust_score,
+        scores:         result.scores,
+        prompt,
+        agent_type:     'main',
+        command_risk:   '',
+        file_zone:      '',
+      });
+      console.log(`[Prompt:Cedar] ${detection} session=${session_id} decision=${cedarResult?.decision ?? 'error'} policy=${cedarResult?.policy_name || detection} trust=${result.trust_score}`);
+    } else {
+      // Clean prompt — classify-only log (unchanged: enforcement deferred to PreToolUse)
+      logDecision({
+        timestamp:      new Date().toISOString(),
+        session_id,
+        user_email,
+        tool:           'prompt',
+        server:         'claude-code',
+        sensitivity:    result.sensitivity,
+        effect:         'Permit',
+        reason:         'Prompt classified — enforcement deferred to PreToolUse',
+        intent:         result.intent,
+        trust_score:    result.trust_score,
+        scores:         result.scores,
+        prompt:         prompt.slice(0, 200),
+        agent_type:     'main',
+        command_risk:   '',
+        file_zone:      '',
+      });
+    }
 
     console.log(`[Prompt] session=${session_id} intent=${result.intent} trust=${result.trust_score} bypass=${isBypassAttempt}`);
 

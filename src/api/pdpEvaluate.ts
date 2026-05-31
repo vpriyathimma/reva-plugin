@@ -529,6 +529,56 @@ export function buildClaudeCodePromptPayload(params: {
   };
 }
 
+// ── Build ClaudeCode SubmitPrompt payload (injection / jailbreak detection) ──
+// Phase 1: exception-only. Called ONLY when the classifier flags injection or
+// jailbreak. Carries the full prompt + prompt_history and the detection booleans
+// so CC-FORBID-PROMPT-INJECTION / CC-FORBID-PROMPT-JAILBREAK fire. The prompt is
+// never erased — this records the deny for audit + trust, nothing else.
+export function buildClaudeCodeInjectionPayload(params: {
+  osUser:        string;
+  projectName:   string;
+  sessionId:     string;
+  prompt:        string;
+  promptHistory: string[];
+  isInjection:   boolean;
+  isJailbreak:   boolean;
+  scores:        Record<string, any>;
+  trustScore:    number;
+  spiffeId?:     string;
+  pipCtx?:       any;
+}) {
+  return {
+    principal: buildDeveloperPrincipal(params.osUser, 'main'),
+    action: { name: 'SubmitPrompt' },
+    resource: {
+      type: 'Prompt',
+      id:   `${params.sessionId.slice(0, 8)}-prompt`,
+      properties: {
+        session_id: params.sessionId,
+      },
+    },
+    context: {
+      access_state:     'Active',
+      os_user:          params.osUser,
+      project_name:     params.projectName,
+      session_id:       params.sessionId,
+      session_trace_id: getOrCreateSessionTrace(params.sessionId),
+      bypass_attempt:   false,
+      prompt_snippet:   params.prompt.slice(0, 200),
+      prompt:           params.prompt,
+      prompt_history:   (params.promptHistory || []).slice(-3).join(' | '),
+      injection_score:  params.scores.injection_score ?? 0,
+      jailbreak_score:  params.scores.jailbreak_score ?? 0,
+      is_injection:     params.isInjection,
+      is_jailbreak:     params.isJailbreak,
+      trust_score:      params.trustScore ?? 70,
+      ...(params.spiffeId ? { spiffe_id: params.spiffeId } : {}),
+      ...flattenPIPContext(params.pipCtx),
+    },
+    session_id: params.sessionId,
+  };
+}
+
 // ── Build MCP tool Cedar payload ────────────────────────────────
 export function buildMCPToolPayload(params: {
   osUser:           string;
