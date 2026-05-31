@@ -17,6 +17,7 @@ export const sessionIntentStore = new Map<string, {
   prompt:         string;
   prompt_history: string[];
   prior_intents:  string;
+  initial_scope:  string;
   timestamp:      string;
 }>();
 
@@ -89,6 +90,10 @@ export async function handlePromptSubmit(req: Request, res: Response) {
       prompt:         prompt.slice(0, 500),
       prompt_history: history.slice(-3),
       prior_intents:  priorIntents,
+      // Phase 2 — initial task scope = the FIRST prompt's intent for this session.
+      // Derived from the prompt (classifier), not hardcoded; subsequent prompts
+      // don't overwrite it, so it stays the originating scope / ceiling.
+      initial_scope:  prevIntent?.initial_scope || result.intent,
       timestamp:      new Date().toISOString(),
     });
 

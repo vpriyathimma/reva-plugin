@@ -100,17 +100,23 @@ interface SubagentContext {
   active:      boolean;
   started_at:  string;
   spawn_count: number; // how many agents spawned this turn
+  agent_name?:     string; // Claude Code's subagent_type, captured at spawn
+  declared_scope?: string; // the task handed to the subagent at spawn
+  agent_id?:       string; // Claude Code's real agentId, captured at PostToolUse(Agent)
 }
 export const subagentContextStore = new Map<string, SubagentContext>();
 
-function markSubagentActive(session_id: string): void {
+function markSubagentActive(session_id: string, agentName?: string, declaredScope?: string): void {
   const existing = subagentContextStore.get(session_id);
   subagentContextStore.set(session_id, {
-    active:      true,
-    started_at:  new Date().toISOString(),
-    spawn_count: (existing?.spawn_count || 0) + 1,
+    active:         true,
+    started_at:     new Date().toISOString(),
+    spawn_count:    (existing?.spawn_count || 0) + 1,
+    agent_name:     agentName    || existing?.agent_name,
+    declared_scope: declaredScope || existing?.declared_scope,
+    agent_id:       existing?.agent_id,
   });
-  console.log(`[Subagent] Context active for session=${session_id} spawn_count=${(existing?.spawn_count || 0) + 1}`);
+  console.log(`[Subagent] Context active for session=${session_id} spawn_count=${(existing?.spawn_count || 0) + 1} name="${agentName || existing?.agent_name || 'subagent'}"`);
 }
 
 function isSubagentActive(session_id: string): boolean {
@@ -221,14 +227,22 @@ export async function handleToolCall(req: Request, res: Response) {
     // When SpawnAgent fires → mark subagent context active
     const isSpawnAgent = tool_name === 'Agent' || tool_name === 'Task' || tool_name === 'TaskCreate' || tool_name === 'TaskUpdate';
     if (isSpawnAgent) {
-      markSubagentActive(session_id);
-      // Capture the intent being passed to the sub-agent
+      // Name + declared scope come from Claude Code's spawn metadata — NOT hardcoded.
+      // subagent_type is the named agent (code-reviewer, auditor, ...); fall back
+      // defensively across key variants, then to a generic label if absent.
+      const subagentName = req.body?.tool_input?.subagent_type
+        || req.body?.tool_input?.subagentType
+        || req.body?.tool_input?.agent_type
+        || req.body?.tool_input?.name
+        || 'subagent';
+      // Capture the intent/task being passed to the sub-agent = its declared scope
       const subagentTask = req.body?.tool_input?.description
         || req.body?.tool_input?.prompt
         || req.body?.tool_input?.task
         || req.body?.tool_input?.command
         || JSON.stringify(req.body?.tool_input || {}).slice(0, 300);
-      console.log(`[Subagent:Intent] session=${session_id} task="${subagentTask}"`);
+      markSubagentActive(session_id, subagentName, subagentTask);
+      console.log(`[Subagent:Spawn] session=${session_id} name="${subagentName}" task="${subagentTask.slice(0, 120)}"`);
     }
 
     // Derive agent_type from subagent context store
@@ -275,6 +289,18 @@ export async function handleToolCall(req: Request, res: Response) {
     // Scope from sensitivity
     const toolScope = SENSITIVITY_SCOPE[result.sensitivity] || 'MCPTool:Read';
 
+    // Phase 2 — agent identity + scope, threaded into context (additive).
+    // For a subagent call, name + declared scope come from the spawn metadata we
+    // stored at SpawnAgent (Claude Code's subagent_type + task). For the main
+    // thread, the existing resolved agentName is kept. initial_scope is the
+    // originating prompt's intent. Nothing here is hardcoded.
+    const subCtx           = subagentContextStore.get(session_id);
+    const isSubagentCall   = !isSpawnAgent && isSubagentActive(session_id);
+    const derivedAgentName = isSubagentCall ? (subCtx?.agent_name || 'subagent') : agentName;
+    const declaredScope    = isSubagentCall ? (subCtx?.declared_scope || '') : '';
+    const initialScope     = sessionIntentStore.get(session_id)?.initial_scope || '';
+    const spawnMethod      = isSubagentCall ? 'spawn_prompt' : 'main';
+
     // ── Cedar PDP evaluation ──────────────────────────────────────
     // Route MCP tools to buildMCPToolPayload
     const isMCPTool = tool_name.startsWith('mcp__');
@@ -295,6 +321,10 @@ export async function handleToolCall(req: Request, res: Response) {
           toolName:        mcpTool,
           serverName:      mcpServer,
           agentType:       derivedAgentType,
+          agentName:       derivedAgentName,
+          declaredScope:   declaredScope,
+          initialScope:    initialScope,
+          spawnMethod:     spawnMethod,
           sessionId:       session_id,
           hitlAcknowledged,
           scores:          { ...result.scores, trust_score: result.trust_score },
@@ -316,6 +346,10 @@ export async function handleToolCall(req: Request, res: Response) {
                             || '',
           command:         req.body?.tool_input?.command || '',
           agentType:       derivedAgentType,
+          agentName:       derivedAgentName,
+          declaredScope:   declaredScope,
+          initialScope:    initialScope,
+          spawnMethod:     spawnMethod,
           sessionId:       session_id,
           spawnCount:      subagentContextStore.get(session_id)?.spawn_count || 1,
           hitlAcknowledged,

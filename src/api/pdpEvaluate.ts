@@ -422,6 +422,10 @@ export function buildFileOperationPayload(params: {
   prompt_history?:  string[];
   spiffeId?:        string;
   pipCtx?:          any;
+  agentName?:       string;
+  declaredScope?:   string;
+  initialScope?:    string;
+  spawnMethod?:     string;
 }) {
   const fileZone   = resolveFileZone(params.filePath || params.command || '');
   const cedarAction = mapToolToAction(params.toolName);
@@ -452,7 +456,8 @@ export function buildFileOperationPayload(params: {
           id:   `${sessionPrefix}-spawnagent${params.spawnCount || 1}`,
           properties: {
             session_id:  params.sessionId,
-            agent_scope: 'subagent',
+            agent_scope: params.declaredScope || 'subagent',
+            agent_name:  params.agentName || 'subagent',
           },
         }
       : {
@@ -471,6 +476,10 @@ export function buildFileOperationPayload(params: {
       file_path:        params.filePath || '',
       file_zone:        fileZone,
       agent_type:       params.agentType,
+      agent_name:       params.agentName  || params.agentType,
+      declared_scope:   params.declaredScope || '',
+      initial_scope:    params.initialScope  || '',
+      spawn_method:     params.spawnMethod   || 'main',
       tool_name:        params.toolName,
       session_id:       params.sessionId,
       session_trace_id: getOrCreateSessionTrace(params.sessionId),
@@ -594,6 +603,10 @@ export function buildMCPToolPayload(params: {
   prompt_history?:  string[];
   spiffeId?:        string;
   pipCtx?:          any;
+  agentName?:       string;
+  declaredScope?:   string;
+  initialScope?:    string;
+  spawnMethod?:     string;
 }) {
   const cedarAction = classifyMCPTool(params.toolName);
   const mcpToolId   = `${params.serverName}__${params.toolName}`;
@@ -620,6 +633,10 @@ export function buildMCPToolPayload(params: {
       tool_name:        params.toolName,
       server_name:      params.serverName,
       agent_type:       params.agentType,
+      agent_name:       params.agentName  || params.agentType,
+      declared_scope:   params.declaredScope || '',
+      initial_scope:    params.initialScope  || '',
+      spawn_method:     params.spawnMethod   || 'main',
       session_id:       params.sessionId,
       session_trace_id: getOrCreateSessionTrace(params.sessionId),
       approver_consent: params.hitlAcknowledged,

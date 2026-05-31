@@ -7,7 +7,7 @@ import { logDecision }       from '../discovery/enroll';
 import { sessionIntentStore } from './beforePrompt';
 import { claudeSessionUserStore } from './onSessionStart';
 import { sessionStore }       from '../discovery/enroll';
-import { activeMcpServers }   from './beforeToolCall';
+import { activeMcpServers, subagentContextStore }   from './beforeToolCall';
 import { enrichSession, getPIPContext } from '../../api/pip';
 
 // Audit store — what actually executed (separate from PDP decisions)
@@ -75,6 +75,29 @@ export async function handlePostToolUse(req: Request, res: Response) {
 
     // Keep last 500 entries
     if (auditLog.length > 500) auditLog.splice(0, auditLog.length - 500);
+
+    // Phase 2 — capture Claude Code's real agentId + token usage from the Agent
+    // spawn result and attach it to the subagent context for attribution/audit.
+    // Fires after the subagent finishes, so it's used for the record, not for
+    // labelling the subagent's in-flight calls (those use the spawn name).
+    if ((tool_name === 'Agent' || tool_name === 'Task') && success) {
+      const tr = (req.body?.tool_response || req.body?.tool_result || {}) as any;
+      const realAgentId = (tr && typeof tr === 'object') ? (tr.agentId || tr.agent_id || '') : '';
+      if (realAgentId) {
+        const sc = subagentContextStore.get(session_id);
+        subagentContextStore.set(session_id, {
+          active:         sc?.active ?? false,
+          started_at:     sc?.started_at || new Date().toISOString(),
+          spawn_count:    sc?.spawn_count || 0,
+          agent_name:     sc?.agent_name,
+          declared_scope: sc?.declared_scope,
+          agent_id:       realAgentId,
+        });
+        const totalTokens   = tr.totalTokens ?? tr.total_tokens ?? 0;
+        const totalToolUses = tr.totalToolUseCount ?? tr.total_tool_use_count ?? 0;
+        console.log(`[Subagent:Result] session=${session_id} agentId=${realAgentId} tokens=${totalTokens} toolUses=${totalToolUses}`);
+      }
+    }
 
     // Error tracking
     if (isError) {
