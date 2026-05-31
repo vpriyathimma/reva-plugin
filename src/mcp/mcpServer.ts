@@ -182,6 +182,7 @@ async function handleMcpRequest(req: Request, res: Response) {
         sensitivity: result.sensitivity, scores: result.scores,
         prompt: prompt.slice(0, 500), prompt_history: history.slice(-3),
         prior_intents: priorIntents,
+        initial_scope: prevIntent?.initial_scope || result.intent,
         timestamp: new Date().toISOString(),
       });
       history.push(prompt.slice(0, 200));

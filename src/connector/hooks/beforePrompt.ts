@@ -17,7 +17,7 @@ export const sessionIntentStore = new Map<string, {
   prompt:         string;
   prompt_history: string[];
   prior_intents:  string;
-  initial_scope:  string;
+  initial_scope?: string;
   timestamp:      string;
 }>();
 
