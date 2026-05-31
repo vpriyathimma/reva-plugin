@@ -3,7 +3,7 @@
 // Cedar makes all decisions at tool call time, not prompt time.
 
 import { Request, Response }          from 'express';
-import { classifyPrompt, recordBypassAttempt, recordBlock, getBlockTrustPenalty } from '../../api/intentClassifier';
+import { classifyPrompt, recordBypassAttempt, recordBlock, getPersistentTrust } from '../../api/intentClassifier';
 import { logDecision }                from '../discovery/enroll';
 import { getOrCreateSessionTrace, evaluateCedar, buildClaudeCodeInjectionPayload } from '../../api/pdpEvaluate';
 
@@ -73,11 +73,12 @@ export async function handlePromptSubmit(req: Request, res: Response) {
       ? `${prevIntent.prior_intents},${prevIntent.intent}`.replace(/^,/, '')
       : '';
 
-    // Apply block trust penalty to prompt-level trust
-    const blockPenalty = getBlockTrustPenalty(user_email);
-    if (blockPenalty > 0) {
-      result.trust_score = Math.max(0, result.trust_score - blockPenalty);
-    }
+    // Persistent, penalty-based actor trust — carries forward across prompts and
+    // decays 15 per recorded block (injection/jailbreak). Replaces the per-prompt
+    // computeTrustScore value, which crashes to 0 on injection; that value still
+    // drives `sensitivity` only. recordBlock above already incremented the count,
+    // so an injection prompt reports baseline-15 (e.g. 55), not 0.
+    result.trust_score = getPersistentTrust(user_email);
 
     // Store full context — PreToolUse reads this for every Cedar evaluation
     sessionIntentStore.set(session_id, {

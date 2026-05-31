@@ -547,12 +547,13 @@ export function buildClaudeCodeInjectionPayload(params: {
   spiffeId?:     string;
   pipCtx?:       any;
 }) {
+  const detection = params.isInjection ? 'prompt-injection' : 'jailbreak-attempt';
   return {
     principal: buildDeveloperPrincipal(params.osUser, 'main'),
     action: { name: 'SubmitPrompt' },
     resource: {
       type: 'Prompt',
-      id:   `${params.sessionId.slice(0, 8)}-prompt`,
+      id:   detection,
       properties: {
         session_id: params.sessionId,
       },

@@ -302,3 +302,14 @@ export function getAllBlocks(): Map<string, BlockRecord[]> {
 export function getBlockTrustPenalty(osUser: string): number {
   return getBlockCount(osUser) * 15;
 }
+
+// Persistent actor trust — baseline minus accumulated block penalty.
+// Decays 15 per recorded block (injection/jailbreak) and carries forward across
+// prompts: a clean prompt does NOT reset it to baseline. This is distinct from
+// computeTrustScore (per-prompt risk), which can crash to 0 on a single prompt.
+// In-memory: persists across prompts within the running process; resets only on
+// process restart (move blockStore to a durable store for cross-restart decay).
+export const TRUST_BASELINE = 70;
+export function getPersistentTrust(osUser: string): number {
+  return Math.max(0, TRUST_BASELINE - getBlockTrustPenalty(osUser));
+}
