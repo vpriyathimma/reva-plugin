@@ -171,7 +171,7 @@ async function handleMcpRequest(req: Request, res: Response) {
     if (toolName === 'reva_evaluate_prompt') {
       const prompt    = toolInput.prompt    || '';
       const agentCid  = toolInput.agent_cid || '';
-      const agentName = agentCid ? await resolveAgentName(agentCid) : 'CoworkAICodingAgent';
+      const agentName = agentCid ? await resolveAgentName(agentCid) : 'claude-code';
       const result    = classifyPrompt(prompt, sessionId, user.email);
       const history   = queryHistoryStore.get(sessionId) || [];
       const prevIntent = sessionIntentStore.get(sessionId);
@@ -212,7 +212,7 @@ async function handleMcpRequest(req: Request, res: Response) {
       const serverName  = toolInput.server_name || '';
       const serverUrl   = toolInput.server_url || '';
       const agentCid    = toolInput.agent_cid || '';
-      const agentName   = agentCid ? await resolveAgentName(agentCid) : 'CoworkAICodingAgent';
+      const agentName   = agentCid ? await resolveAgentName(agentCid) : 'claude-code';
       const sessionIntent = sessionIntentStore.get(sessionId);
       const baseSensitivity = (() => {
         const probed = discoveredServers.get(serverName) || discoveredServers.get(`claude.ai ${serverName}`);

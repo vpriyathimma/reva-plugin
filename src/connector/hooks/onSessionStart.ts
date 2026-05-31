@@ -23,6 +23,10 @@ export const spiffeIdStore = new Map<string, string>();
 // Hostname store — maps os_user → hostname (for terminate session key matching)
 export const hostnameStore = new Map<string, string>();
 
+// Runtime model per session (e.g. claude-opus-4-8), reported by Claude Code at
+// SessionStart — used to name the main agent from the runtime, not a literal.
+export const sessionModelStore = new Map<string, string>();
+
 // Agent ID store — maps os_user:hostname → synthetic agent ID (fallback)
 const agentIdStore = new Map<string, string>();
 
@@ -202,6 +206,9 @@ export async function handleSessionStart(req: Request, res: Response) {
 
     // Store os_user for this session so PreToolUse can resolve identity
     claudeSessionUserStore.set(session_id, os_user);
+
+    // Store the runtime model so PreToolUse can name the main agent from the runtime
+    if (model) sessionModelStore.set(session_id, model);
 
     // Store hostname for terminate session key matching
     if (hostname) {

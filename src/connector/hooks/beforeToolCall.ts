@@ -4,7 +4,7 @@ import { getBlockTrustPenalty, getBlocks, getBlockCount } from '../../api/intent
 import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
-import { claudeSessionUserStore, spiffeIdStore, hostnameStore } from './onSessionStart';
+import { claudeSessionUserStore, spiffeIdStore, hostnameStore, sessionModelStore } from './onSessionStart';
 import { getPIPContext } from '../../api/pip';
 import { getHITLConfig as getHITLConfigFn, findApprovalForDeveloper as findApprovalForDeveloperFn, findPendingApproval as findPendingApprovalFn, triggerHITL as triggerHITLFn } from '../../api/hitlConfig';
 import { isSessionTerminated } from '../../api/sessionControl';
@@ -281,7 +281,10 @@ export async function handleToolCall(req: Request, res: Response) {
     }
 
     // Resolve agent name from Okta (cached)
-    const agentName = agent_cid ? await resolveAgentName(agent_cid) : 'CoworkAICodingAgent';
+    // Main-agent name from the Claude Code runtime (model reported at SessionStart),
+    // not a hardcoded registry label. Strips the [1m]-style context-window suffix.
+    const runtimeModel = (sessionModelStore.get(session_id) || '').replace(/\[[^\]]*\]/g, '').trim();
+    const agentName = agent_cid ? await resolveAgentName(agent_cid) : (runtimeModel || 'claude-code');
 
     // Ensure session trace ID
     getOrCreateSessionTrace(session_id);

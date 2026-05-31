@@ -6,11 +6,11 @@ const agentNameCache = new Map<string, string>();
 
 // Known agents — update when Okta EA API becomes available
 const KNOWN_AGENTS: Record<string, string> = {
-  'wlp11ts2kssa3nS2f698': 'CoworkAICodingAgent',
+  'wlp11ts2kssa3nS2f698': 'claude-code',
 };
 
 export async function resolveAgentName(clientId: string): Promise<string> {
-  if (!clientId) return 'CoworkAICodingAgent';
+  if (!clientId) return 'claude-code';
   if (agentNameCache.has(clientId)) return agentNameCache.get(clientId)!;
 
   const name = KNOWN_AGENTS[clientId] || clientId;
