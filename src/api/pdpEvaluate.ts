@@ -361,7 +361,7 @@ function buildDeveloperPrincipal(
     const aid = agentId || 'unknown';
     return {
       type: 'Agent',
-      id:   `${aid}:${osUser}`,
+      id:   `${osUser}:${aid}`,
       properties: {
         agent_type:        'subagent',
         agent_id:          aid,
