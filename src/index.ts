@@ -104,6 +104,7 @@ app.use('/api', hitlRouter);
 // Generic hook handler — all 26 Claude Code lifecycle hooks
 import { logDecision } from './connector/discovery/enroll';
 import { recordBlock } from './api/intentClassifier';
+import { bindSpawnToAgent, extractAgentId, displayName } from './connector/hooks/beforeToolCall';
 app.post('/api/pdp/hook', (req, res) => {
   const event = req.body?.hook_event_name || 'unknown';
   const session_id = req.body?.session_id || '';
@@ -129,8 +130,26 @@ app.post('/api/pdp/hook', (req, res) => {
     logDecision({ timestamp: ts, session_id, user_email, tool: 'ConfigChange', server: 'claude-code', sensitivity: 'critical', effect: 'Deny', reason: `Config modified: ${path}`, intent: 'config_change' });
   }
 
-  // SubagentStart/Stop, TaskCreated/Completed — log sub-agent lifecycle
-  if (event === 'SubagentStart' || event === 'TaskCreated') {
+  // SubagentStart — the runtime now reveals the per-instance agent_id. Join it to
+  // the oldest queued spawn so the subagent's name + scope are attributable on every
+  // subsequent tool call. agent_type is empty on this payload (confirmed via logs),
+  // so the name comes from the spawn join, not the hook.
+  if (event === 'SubagentStart') {
+    const agent_id = extractAgentId(req.body);
+    const bound = bindSpawnToAgent(session_id, agent_id);
+    logDecision({ timestamp: ts, session_id, user_email, tool: 'SubagentStart', server: 'claude-code', sensitivity: 'medium', effect: 'Permit', reason: `Subagent started: ${bound ? displayName(bound) : agent_id || 'unknown'}`.slice(0, 200), intent: 'delegate', agent_type: 'subagent' });
+  }
+
+  // SubagentStop / TaskCompleted — lifecycle close. agent_id is present here too;
+  // bind defensively in case SubagentStart was missed, then record.
+  if (event === 'SubagentStop' || event === 'TaskCompleted') {
+    const agent_id = extractAgentId(req.body);
+    const bound = agent_id ? bindSpawnToAgent(session_id, agent_id) : undefined;
+    logDecision({ timestamp: ts, session_id, user_email, tool: event, server: 'claude-code', sensitivity: 'medium', effect: 'Permit', reason: `${event}: ${bound ? displayName(bound) : agent_id || ''}`.slice(0, 200), intent: 'delegate', agent_type: 'subagent' });
+  }
+
+  // TaskCreated — task fan-out (not a subagent spawn); log only.
+  if (event === 'TaskCreated') {
     const task = req.body?.task || req.body?.description || req.body?.prompt || '';
     logDecision({ timestamp: ts, session_id, user_email, tool: event, server: 'claude-code', sensitivity: 'medium', effect: 'Permit', reason: `${event}: ${task}`.slice(0, 200), intent: 'delegate', agent_type: 'subagent' });
   }

@@ -123,6 +123,86 @@ function isSubagentActive(session_id: string): boolean {
   return subagentContextStore.get(session_id)?.active || false;
 }
 
+// ── Phase 2 — canonical subagent identity + naming convention ────────────────
+// Name + declared_scope are known at PreToolUse(Task) spawn; the per-instance
+// agent_id is assigned by the runtime AFTER spawn (SubagentStart, every subsequent
+// tool-call body, SubagentStop). agent_type is empty on lifecycle payloads
+// (confirmed in logs), so the two facts arrive on different hooks and are joined
+// via a FIFO keyed `${session}::${agent_id}` — concurrency-safe per instance.
+// Naming (locked): canonical = agent_id; semantic = subagent_type; display =
+// `${name}#${id.slice(0,8)}`. Cedar principal stays the human; the agent rides in
+// context (agent_id/agent_name/agent_type/parent_session_id) — never the principal.
+export type AgentKind = 'main' | 'subagent';
+export interface AgentIdentity {
+  agent_type:        AgentKind;
+  agent_id:          string; // '' for main
+  agent_name:        string; // subagent_type, or runtime model for main
+  declared_scope:    string;
+  initial_scope:     string;
+  spawn_method:      string; // 'main' | 'spawn_prompt'
+  parent_session_id: string;
+}
+interface PendingSpawn { agent_name: string; declared_scope: string; initial_scope: string; spawned_at: string; }
+
+const pendingSpawns = new Map<string, PendingSpawn[]>();           // session → unbound spawns (FIFO)
+export const boundAgents = new Map<string, AgentIdentity>();        // `${session}::${agent_id}` → identity
+const identKey = (session_id: string, agent_id: string) => `${session_id}::${agent_id}`;
+
+export function enqueueSpawn(session_id: string, spawn: { agent_name: string; declared_scope: string; initial_scope: string }): void {
+  const q = pendingSpawns.get(session_id) || [];
+  q.push({ ...spawn, spawned_at: new Date().toISOString() });
+  pendingSpawns.set(session_id, q);
+  console.log(`[Identity] Spawn queued session=${session_id} name="${spawn.agent_name}" pending=${q.length}`);
+}
+
+export function bindSpawnToAgent(session_id: string, agent_id: string): AgentIdentity | undefined {
+  if (!agent_id) return undefined;
+  const k = identKey(session_id, agent_id);
+  const existing = boundAgents.get(k);
+  if (existing) return existing;
+  const q = pendingSpawns.get(session_id) || [];
+  const spawn = q.shift();                 // FIFO — spawns are sequential tool calls
+  pendingSpawns.set(session_id, q);
+  const identity: AgentIdentity = {
+    agent_type:        'subagent',
+    agent_id,
+    agent_name:        spawn?.agent_name     || 'subagent',
+    declared_scope:    spawn?.declared_scope || '',
+    initial_scope:     spawn?.initial_scope  || '',
+    spawn_method:      'spawn_prompt',
+    parent_session_id: session_id,
+  };
+  boundAgents.set(k, identity);
+  console.log(`[Identity] Bound agent_id=${agent_id} → "${identity.agent_name}" session=${session_id}`);
+  return identity;
+}
+
+export function resolveSubagent(session_id: string, agent_id: string): AgentIdentity {
+  return boundAgents.get(identKey(session_id, agent_id)) || bindSpawnToAgent(session_id, agent_id)!;
+}
+
+export function resolveMain(session_id: string, runtimeName: string, initial_scope: string): AgentIdentity {
+  return {
+    agent_type:        'main',
+    agent_id:          '',
+    agent_name:        runtimeName || 'claude-code',
+    declared_scope:    '',
+    initial_scope:     initial_scope || '',
+    spawn_method:      'main',
+    parent_session_id: session_id,
+  };
+}
+
+export function displayName(id: AgentIdentity): string {
+  return id.agent_type === 'subagent' && id.agent_id ? `${id.agent_name}#${id.agent_id.slice(0, 8)}` : id.agent_name;
+}
+
+export function extractAgentId(body: any): string {
+  return body?.agent_id || body?.agentId
+      || body?.tool_response?.agentId || body?.tool_response?.agent_id
+      || body?.tool_result?.agentId || body?.tool_result?.agent_id || '';
+}
+
 function trackMcpServer(session_id: string, tool_name: string): void {
   if (!tool_name.startsWith('mcp__')) return;
   const parts = tool_name.split('__');
@@ -248,12 +328,16 @@ export async function handleToolCall(req: Request, res: Response) {
         || req.body?.tool_input?.command
         || JSON.stringify(req.body?.tool_input || {}).slice(0, 300);
       markSubagentActive(session_id, subagentName, subagentTask);
+      // Queue spawn metadata; the runtime reveals the agent_id later (SubagentStart),
+      // at which point the name + scope are joined to it. initial_scope is frozen from
+      // the originating prompt — NOT the spawn task — so drift is measured against intent.
+      enqueueSpawn(session_id, {
+        agent_name:     subagentName,
+        declared_scope: subagentTask,
+        initial_scope:  sessionIntentStore.get(session_id)?.initial_scope || '',
+      });
       console.log(`[Subagent:Spawn] session=${session_id} name="${subagentName}" task="${subagentTask.slice(0, 120)}"`);
     }
-
-    // Derive agent_type from subagent context store
-    // If subagent is active AND this is NOT the SpawnAgent call itself → it is a subagent action
-    const derivedAgentType = (!isSpawnAgent && isSubagentActive(session_id)) ? 'subagent' : 'main';
 
     const result = classifyToolCall(tool_name, server_name, baseSensitivity, session_id, promptIntent);
 
@@ -298,17 +382,23 @@ export async function handleToolCall(req: Request, res: Response) {
     // Scope from sensitivity
     const toolScope = SENSITIVITY_SCOPE[result.sensitivity] || 'MCPTool:Read';
 
-    // Phase 2 — agent identity + scope, threaded into context (additive).
-    // For a subagent call, name + declared scope come from the spawn metadata we
-    // stored at SpawnAgent (Claude Code's subagent_type + task). For the main
-    // thread, the existing resolved agentName is kept. initial_scope is the
-    // originating prompt's intent. Nothing here is hardcoded.
-    const subCtx           = subagentContextStore.get(session_id);
-    const isSubagentCall   = !isSpawnAgent && isSubagentActive(session_id);
-    const derivedAgentName = isSubagentCall ? (subCtx?.agent_name || 'subagent') : agentName;
-    const declaredScope    = isSubagentCall ? (subCtx?.declared_scope || '') : '';
-    const initialScope     = sessionIntentStore.get(session_id)?.initial_scope || '';
-    const spawnMethod      = isSubagentCall ? 'spawn_prompt' : 'main';
+    // Phase 2 — agent identity resolved off the per-subagent agent_id Claude Code
+    // injects on the tool-call body. Presence of agent_id ⇒ subagent (main calls
+    // carry none). Name + scope are joined from the spawn FIFO via that id, so
+    // concurrent subagents are attributed independently — no session-level collision.
+    const bodyAgentId      = extractAgentId(req.body);
+    const isSubagentCall   = !isSpawnAgent && !!bodyAgentId;
+    const identity         = isSubagentCall
+      ? resolveSubagent(session_id, bodyAgentId)
+      : resolveMain(session_id, agentName, sessionIntentStore.get(session_id)?.initial_scope || '');
+
+    const derivedAgentType = identity.agent_type;          // 'main' | 'subagent'
+    const derivedAgentName = displayName(identity);        // e.g. code-reviewer#a3c2fcf6
+    const declaredScope    = identity.declared_scope;
+    const initialScope     = identity.initial_scope;
+    const spawnMethod      = identity.spawn_method;
+    const agentIdForCtx    = identity.agent_id;            // '' for main
+    const parentSessionId  = identity.parent_session_id;
 
     // ── Cedar PDP evaluation ──────────────────────────────────────
     // Route MCP tools to buildMCPToolPayload
@@ -331,6 +421,8 @@ export async function handleToolCall(req: Request, res: Response) {
           serverName:      mcpServer,
           agentType:       derivedAgentType,
           agentName:       derivedAgentName,
+          agentId:         agentIdForCtx,
+          parentSessionId: parentSessionId,
           declaredScope:   declaredScope,
           initialScope:    initialScope,
           spawnMethod:     spawnMethod,
@@ -356,6 +448,8 @@ export async function handleToolCall(req: Request, res: Response) {
           command:         req.body?.tool_input?.command || '',
           agentType:       derivedAgentType,
           agentName:       derivedAgentName,
+          agentId:         agentIdForCtx,
+          parentSessionId: parentSessionId,
           declaredScope:   declaredScope,
           initialScope:    initialScope,
           spawnMethod:     spawnMethod,

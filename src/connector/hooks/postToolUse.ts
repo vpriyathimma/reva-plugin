@@ -7,7 +7,7 @@ import { logDecision }       from '../discovery/enroll';
 import { sessionIntentStore } from './beforePrompt';
 import { claudeSessionUserStore } from './onSessionStart';
 import { sessionStore }       from '../discovery/enroll';
-import { activeMcpServers, subagentContextStore }   from './beforeToolCall';
+import { activeMcpServers, subagentContextStore, bindSpawnToAgent }   from './beforeToolCall';
 import { enrichSession, getPIPContext } from '../../api/pip';
 
 // Audit store — what actually executed (separate from PDP decisions)
@@ -84,6 +84,8 @@ export async function handlePostToolUse(req: Request, res: Response) {
       const tr = (req.body?.tool_response || req.body?.tool_result || {}) as any;
       const realAgentId = (tr && typeof tr === 'object') ? (tr.agentId || tr.agent_id || '') : '';
       if (realAgentId) {
+        // Fallback bind — in case SubagentStart didn't fire/arrive before this.
+        bindSpawnToAgent(session_id, realAgentId);
         const sc = subagentContextStore.get(session_id);
         subagentContextStore.set(session_id, {
           active:         sc?.active ?? false,

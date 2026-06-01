@@ -343,24 +343,12 @@ export function mapToolToAction(toolName: string): string {
   return 'ReadFile'; // default safe
 }
 
-// ── Build Developer principal block with profile (for ClaudeCode policies) ──
-function buildDeveloperPrincipal(osUser: string, agentType: string) {
-  const principalType = agentType === 'subagent' ? 'Agent' : 'Developer';
-
-  // Agent principal — no Department parent, no role
-  if (principalType === 'Agent') {
-    return {
-      type: 'Agent',
-      id:   osUser,
-      properties: {
-        agent_type:        agentType,
-        parent_session_id: '',
-      },
-      parents: [],
-    };
-  }
-
-  // Developer principal — inject role/employment_type and Department parent
+// ── Build the principal block. TrAT locked rule: the principal is ALWAYS the
+// human (Developer). A spawned agent is the act.sub referent and is carried in
+// context (agent_id / agent_name / agent_type / parent_session_id), never promoted
+// to principal. agentType is retained in the signature for call-site compatibility
+// and flows into context, but no longer switches the principal entity. ──
+function buildDeveloperPrincipal(osUser: string, _agentType: string) {
   const profile = resolveDeveloperProfile(osUser);
   return {
     type: 'Developer',
@@ -423,6 +411,8 @@ export function buildFileOperationPayload(params: {
   spiffeId?:        string;
   pipCtx?:          any;
   agentName?:       string;
+  agentId?:         string;
+  parentSessionId?: string;
   declaredScope?:   string;
   initialScope?:    string;
   spawnMethod?:     string;
@@ -477,6 +467,8 @@ export function buildFileOperationPayload(params: {
       file_zone:        fileZone,
       agent_type:       params.agentType,
       agent_name:       params.agentName  || params.agentType,
+      agent_id:         params.agentId || '',
+      parent_session_id: params.parentSessionId || '',
       declared_scope:   params.declaredScope || '',
       initial_scope:    params.initialScope  || '',
       spawn_method:     params.spawnMethod   || 'main',
@@ -604,6 +596,8 @@ export function buildMCPToolPayload(params: {
   spiffeId?:        string;
   pipCtx?:          any;
   agentName?:       string;
+  agentId?:         string;
+  parentSessionId?: string;
   declaredScope?:   string;
   initialScope?:    string;
   spawnMethod?:     string;
@@ -634,6 +628,8 @@ export function buildMCPToolPayload(params: {
       server_name:      params.serverName,
       agent_type:       params.agentType,
       agent_name:       params.agentName  || params.agentType,
+      agent_id:         params.agentId || '',
+      parent_session_id: params.parentSessionId || '',
       declared_scope:   params.declaredScope || '',
       initial_scope:    params.initialScope  || '',
       spawn_method:     params.spawnMethod   || 'main',
