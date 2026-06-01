@@ -343,12 +343,36 @@ export function mapToolToAction(toolName: string): string {
   return 'ReadFile'; // default safe
 }
 
-// ── Build the principal block. TrAT locked rule: the principal is ALWAYS the
-// human (Developer). A spawned agent is the act.sub referent and is carried in
-// context (agent_id / agent_name / agent_type / parent_session_id), never promoted
-// to principal. agentType is retained in the signature for call-site compatibility
-// and flows into context, but no longer switches the principal entity. ──
-function buildDeveloperPrincipal(osUser: string, _agentType: string) {
+// ── Build the principal block.
+// Main agent  → Developer::"<osUser>"  (the human; role + Department parent).
+// Subagent    → Agent::"<agent_id>:<osUser>"  — the agent IS the subject (as in the
+//   existing decision logs), but keyed by the real per-instance agent_id fused with
+//   the developer, so concurrent subagents are distinct and the human is visible in
+//   the subject itself. agent_id/agent_name/agent_type/parent_session_id ride as
+//   principal properties (and remain in context for policy use). ──
+function buildDeveloperPrincipal(
+  osUser: string,
+  agentType: string,
+  agentId?: string,
+  agentName?: string,
+  parentSessionId?: string,
+) {
+  if (agentType === 'subagent') {
+    const aid = agentId || 'unknown';
+    return {
+      type: 'Agent',
+      id:   `${aid}:${osUser}`,
+      properties: {
+        agent_type:        'subagent',
+        agent_id:          aid,
+        agent_name:        agentName || 'subagent',
+        parent_session_id: parentSessionId || '',
+      },
+      parents: [],
+    };
+  }
+
+  // Main agent — the human Developer with role/employment_type + Department parent.
   const profile = resolveDeveloperProfile(osUser);
   return {
     type: 'Developer',
@@ -429,7 +453,7 @@ export function buildFileOperationPayload(params: {
   const sanitizedCommand = (params.command || '').replace(/[\r\n]+/g, ' ').slice(0, 200);
 
   return {
-    principal: buildDeveloperPrincipal(params.osUser, params.agentType),
+    principal: buildDeveloperPrincipal(params.osUser, params.agentType, params.agentId, params.agentName, params.parentSessionId),
     action: { name: cedarAction },
     resource: isCommand
       ? {
@@ -606,7 +630,7 @@ export function buildMCPToolPayload(params: {
   const mcpToolId   = `${params.serverName}__${params.toolName}`;
 
   return {
-    principal: buildDeveloperPrincipal(params.osUser, params.agentType),
+    principal: buildDeveloperPrincipal(params.osUser, params.agentType, params.agentId, params.agentName, params.parentSessionId),
     action: { name: cedarAction },
     resource: {
       type: 'MCPTool',
