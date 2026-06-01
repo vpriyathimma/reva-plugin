@@ -167,6 +167,12 @@ export async function handleToolCall(req: Request, res: Response) {
       client_source = 'claude-code',
     } = req.body;
 
+    // ── RAW capture: full evaluate body + headers. This is the ONLY place a
+    // subagent's tool-call payload lands — needed to confirm whether Claude Code
+    // sends a per-subagent id (agent_id/agentId) we can key concurrent attribution on.
+    const rawHeaders = { ...req.headers, authorization: undefined, cookie: undefined };
+    console.log(`[Evaluate:RAW] tool=${tool_name} headers=${JSON.stringify(rawHeaders)} body=${JSON.stringify(req.body)}`);
+
     // Resolve OS user — X-OS-User header is most reliable (set by hooks.json allowedEnvVars)
     const osUserFromHeader  = (req.headers['x-os-user'] as string) || '';
     const projectFromHeader = (req.headers['x-project-dir'] as string) || '';

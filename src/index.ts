@@ -110,7 +110,8 @@ app.post('/api/pdp/hook', (req, res) => {
   const user_email = req.body?.env?.USER || '';
   const ts = new Date().toISOString();
 
-  console.log(`[HOOK:${event}] session=${session_id} user=${user_email} data=${JSON.stringify(req.body).slice(0, 200)}`);
+  // Full body — no truncation (per-agent id / lifecycle payload investigation)
+  console.log(`[HOOK:${event}] session=${session_id} user=${user_email} data=${JSON.stringify(req.body)}`);
 
   // PermissionDenied — Claude blocked something, record for trust degradation
   if (event === 'PermissionDenied') {
