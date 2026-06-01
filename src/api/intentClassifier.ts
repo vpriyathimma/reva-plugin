@@ -63,6 +63,12 @@ const INJECTION_PATTERNS = [
   /read.*(?:file|config|yaml|json).*(?:follow|execute|apply|do what|run what|act on)/,
   /(?:follow|execute|apply|do what|run).*(?:instructions|steps|commands).*(?:in|from|inside).*(?:file|config|yaml)/,
   /(?:setup|migration|deploy).*instructions/,
+  // Indirect injection — stealth / authority framing embedded in read content
+  /do not (?:mention|tell|reveal|disclose|report|log|include)/,
+  /(?:complete|do|run|execute)\s+(?:it|this|the following|the above)?\s*silently/,
+  /without (?:mentioning|telling|informing|notifying)/,
+  /\b(?:agent|ai|assistant|system)\s+(?:note|instruction|directive|task)\b/,
+  /(?:exfiltrat|dump|leak)\w*.*(?:env|secret|token|credential|key)/,
 ];
 
 const JAILBREAK_PATTERNS = [

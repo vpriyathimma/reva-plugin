@@ -103,16 +103,88 @@ app.use('/api', hitlRouter);
 
 // Generic hook handler — all 26 Claude Code lifecycle hooks
 import { logDecision } from './connector/discovery/enroll';
-import { recordBlock } from './api/intentClassifier';
+import { recordBlock, classifyPrompt, getPersistentTrust } from './api/intentClassifier';
 import { bindSpawnToAgent, extractAgentId, displayName } from './connector/hooks/beforeToolCall';
-app.post('/api/pdp/hook', (req, res) => {
+import { evaluateCedar, buildClaudeCodeInjectionPayload } from './api/pdpEvaluate';
+import { claudeSessionUserStore } from './connector/hooks/onSessionStart';
+
+// Dedupe file-content injection scans — one block per (session, file) so repeated
+// PostToolBatch posts don't crater trust for the same payload.
+const scannedFileInjections = new Set<string>();
+app.post('/api/pdp/hook', async (req, res) => {
   const event = req.body?.hook_event_name || 'unknown';
   const session_id = req.body?.session_id || '';
-  const user_email = req.body?.env?.USER || '';
+  const user_email = req.body?.env?.USER || claudeSessionUserStore.get(session_id) || '';
   const ts = new Date().toISOString();
 
   // Full body — no truncation (per-agent id / lifecycle payload investigation)
   console.log(`[HOOK:${event}] session=${session_id} user=${user_email} data=${JSON.stringify(req.body)}`);
+
+  // PostToolBatch — scan content an agent READ for prompt injection. The payload
+  // lives in file content, not the user prompt, so it never reaches SubmitPrompt.
+  // Here we run the same injection classifier over each Read tool_response; on a hit
+  // we record a prompt_injection block (trust −15) and log a Cedar SubmitPrompt
+  // decision — identical to UserPromptSubmit. This fires whether or not Claude acts
+  // on the payload, so an injection Claude refuses still lands in the decisions feed.
+  if (event === 'PostToolBatch') {
+    const calls = Array.isArray(req.body?.tool_calls) ? req.body.tool_calls : [];
+    for (const c of calls) {
+      if (!/^read/i.test(c?.tool_name || '')) continue;
+      const content = typeof c?.tool_response === 'string' ? c.tool_response : '';
+      if (!content) continue;
+      const fp = c?.tool_input?.file_path || c?.tool_input?.path || '';
+      const dedupeKey = `${session_id}::${fp}`;
+      if (scannedFileInjections.has(dedupeKey)) continue;
+
+      const result = classifyPrompt(content, session_id, user_email);
+      const isInjection = result.scores.injection_score > 50;
+      const isJailbreak = result.scores.jailbreak_score > 50;
+      if (!isInjection && !isJailbreak) continue;
+
+      scannedFileInjections.add(dedupeKey);
+      const detection = isInjection ? 'prompt_injection' : 'jailbreak_attempt';
+      recordBlock(user_email, {
+        type: detection,
+        prompt: `read:${fp} — ${content.slice(0, 160)}`.slice(0, 200),
+        score: isInjection ? result.scores.injection_score : result.scores.jailbreak_score,
+        timestamp: ts,
+      });
+
+      let cedarResult;
+      try {
+        cedarResult = await evaluateCedar(buildClaudeCodeInjectionPayload({
+          osUser:        user_email,
+          projectName:   (req.body?.cwd || '').split('/').pop() || 'unknown',
+          sessionId:     session_id,
+          prompt:        content.slice(0, 500),
+          promptHistory: [],
+          isInjection,
+          isJailbreak,
+          scores:        result.scores,
+          trustScore:    getPersistentTrust(user_email),
+        }));
+      } catch (e: any) {
+        console.error('[FileInjection:Cedar] SubmitPrompt eval failed:', e.message);
+      }
+
+      logDecision({
+        timestamp:    ts,
+        session_id,
+        user_email,
+        tool:         'prompt',
+        server:       'claude-code',
+        sensitivity:  result.sensitivity,
+        effect:       cedarResult && cedarResult.decision === 'allow' ? 'Permit' : 'Deny',
+        reason:       (cedarResult && cedarResult.policy_name) || `${detection} in file ${fp}`,
+        intent:       'prompt_injection_in_read',
+        trust_score:  getPersistentTrust(user_email),
+        scores:       result.scores,
+        prompt:       content.slice(0, 200),
+        agent_type:   'subagent',
+      });
+      console.log(`[FileInjection] ${detection} in ${fp} session=${session_id} score=${result.scores.injection_score} decision=${cedarResult?.decision ?? 'error'} trust=${getPersistentTrust(user_email)}`);
+    }
+  }
 
   // PermissionDenied — Claude blocked something, record for trust degradation
   if (event === 'PermissionDenied') {
