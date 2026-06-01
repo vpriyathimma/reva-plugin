@@ -271,7 +271,7 @@ export function classifyToolCall(
 // Keyed by os_user (same as PIP) to avoid session_id mismatch between hooks
 
 export interface BlockRecord {
-  type:      'prompt_injection' | 'file_injection' | 'jailbreak_attempt';
+  type:      'prompt_injection' | 'file_injection' | 'jailbreak_attempt' | 'intent_drift';
   prompt:    string;
   score:     number;
   timestamp: string;
@@ -312,4 +312,68 @@ export function getBlockTrustPenalty(osUser: string): number {
 export const TRUST_BASELINE = 70;
 export function getPersistentTrust(osUser: string): number {
   return Math.max(0, TRUST_BASELINE - getBlockTrustPenalty(osUser));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4 — Intent drift, expressed entirely in the existing command-tier
+// taxonomy (safe / restricted / destructive). No separate classification.
+//
+// An agent's *intent* resolves to the highest command tier it is allowed to reach.
+// Drift = the command it actually issues outranks that tier. Applies to every
+// agent (main and spawned): if the originating intent is read/explore (safe) and
+// any agent in the tree runs a restricted/destructive command, that is drift.
+//
+// The intent→tier resolver is a PLUG-AND-PLAY engine. Swap our default for any
+// external engine (local model, HTTP service, your own) via setIntentEngine();
+// the drift/PDP path only ever calls resolveIntentTier() + compareTiers().
+// ─────────────────────────────────────────────────────────────────────────────
+export type CommandTier = 'safe' | 'restricted' | 'destructive';
+const TIER_RANK: Record<CommandTier, number> = { safe: 0, restricted: 1, destructive: 2 };
+
+export interface IntentEngineInput {
+  prompt?:        string;
+  declared_scope?: string;
+  initial_scope?: string;
+  agent_name?:    string;   // e.g. Claude Code's "explore" / "general-purpose"
+  agent_type?:    string;
+}
+export interface IntentEngine {
+  resolveIntentTier(input: IntentEngineInput): CommandTier;
+}
+
+// Default heuristic — reads agent_name + scopes, NOT just the literal prompt verb
+// (Claude Code maps "review files" to an "explore" agent, etc.). Exploratory /
+// read intents permit only `safe`; explicit mutation intents permit `restricted`;
+// explicit destructive intents permit `destructive`.
+const READ_SIGNALS      = /\b(read|review|explore|inspect|audit|summar|analy|list|search|find|look|examine|understand|check|explain|describe|general-purpose)\b/i;
+const MUTATE_SIGNALS     = /\b(edit|write|update|modify|change|fix|refactor|create|add|implement|build|install|deploy|push|commit|migrate|format|lint)\b/i;
+const DESTRUCTIVE_SIGNALS = /\b(delete|remove|drop|destroy|wipe|reset|rm\b|purge|truncate|revert)\b/i;
+
+const defaultIntentEngine: IntentEngine = {
+  resolveIntentTier({ prompt, declared_scope, initial_scope, agent_name }) {
+    const hay = `${agent_name || ''} ${initial_scope || ''} ${declared_scope || ''} ${prompt || ''}`.toLowerCase();
+    if (DESTRUCTIVE_SIGNALS.test(hay)) return 'destructive';
+    // Mutation intent counts only if it isn't dominated by a read/explore framing.
+    if (MUTATE_SIGNALS.test(hay) && !READ_SIGNALS.test(hay)) return 'restricted';
+    return 'safe';
+  },
+};
+
+let intentEngine: IntentEngine = defaultIntentEngine;
+export function setIntentEngine(engine: IntentEngine): void { intentEngine = engine; }
+export function getIntentEngine(): IntentEngine { return intentEngine; }
+export function resolveIntentTier(input: IntentEngineInput): CommandTier {
+  try { return intentEngine.resolveIntentTier(input); } catch { return 'safe'; }
+}
+
+// Drift = command tier outranks intent tier. Score mirrors injection_score (0–100,
+// >50 ⇒ drift) so trust/penalty handling is uniform across signal types.
+export function computeIntentDrift(
+  commandTier: CommandTier,
+  intentTier: CommandTier,
+): { is_intent_drift: boolean; intent_drift_score: number } {
+  const gap = TIER_RANK[commandTier] - TIER_RANK[intentTier];
+  if (gap <= 0) return { is_intent_drift: false, intent_drift_score: 0 };
+  // gap 1 (e.g. safe→restricted) = 60; gap 2 (safe→destructive) = 90
+  return { is_intent_drift: true, intent_drift_score: gap >= 2 ? 90 : 60 };
 }

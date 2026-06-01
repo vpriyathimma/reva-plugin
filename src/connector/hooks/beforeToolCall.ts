@@ -1,6 +1,6 @@
 import { Request, Response }     from 'express';
 import { classifyToolCall }      from '../../api/intentClassifier';
-import { getBlockTrustPenalty, getBlocks, getBlockCount } from '../../api/intentClassifier';
+import { getBlockTrustPenalty, getBlocks, getBlockCount, recordBlock, resolveIntentTier, computeIntentDrift } from '../../api/intentClassifier';
 import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
@@ -14,7 +14,7 @@ import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
 import { recordHITLApproval, recordHITLDenial } from '../hitl/callback';
 import { resolveAgentName }      from '../../api/agentResolver';
-import { evaluateCedar, buildCallToolPayload, buildFileOperationPayload, buildMCPToolPayload, getOrCreateSessionTrace } from '../../api/pdpEvaluate';
+import { evaluateCedar, buildCallToolPayload, buildFileOperationPayload, buildMCPToolPayload, getOrCreateSessionTrace, classifyCommand } from '../../api/pdpEvaluate';
 
 // HITL user mapping — OS username → Okta email
 const HITL_MAP: Record<string, string> = {
@@ -400,6 +400,28 @@ export async function handleToolCall(req: Request, res: Response) {
     const agentIdForCtx    = identity.agent_id;            // '' for main
     const parentSessionId  = identity.parent_session_id;
 
+    // ── Phase 4 — intent drift (command-tier escalation), all agents ──────────
+    // Resolve the agent's intent to a command tier via the pluggable engine, then
+    // compare to the tier of the bash command it is actually issuing. Drift = the
+    // command outranks the intent (e.g. review/explore intent → destructive curl).
+    // Applies to main and subagents alike; enforced by Cedar CC-FORBID-INTENT-DRIFT.
+    const driftCommand = req.body?.tool_input?.command || '';
+    const commandTier  = driftCommand ? classifyCommand(driftCommand) : 'safe';
+    const intentTier   = resolveIntentTier({
+      prompt:         query,
+      declared_scope: declaredScope,
+      initial_scope:  initialScope,
+      agent_name:     derivedAgentName,
+      agent_type:     derivedAgentType,
+    });
+    const { is_intent_drift, intent_drift_score } = computeIntentDrift(commandTier, intentTier);
+    if (is_intent_drift) {
+      const blk = { type: 'intent_drift' as const, prompt: driftCommand.slice(0, 200), score: intent_drift_score, timestamp: new Date().toISOString() };
+      recordBlock(user_email, blk);                          // roll up to session/developer trust
+      if (agentIdForCtx) recordBlock(agentIdForCtx, blk);    // per-agent trust (subagents)
+      console.log(`[Drift] agent="${derivedAgentName}" intent=${intentTier} command=${commandTier} cmd="${driftCommand.slice(0, 80)}" → DRIFT score=${intent_drift_score}`);
+    }
+
     // ── Cedar PDP evaluation ──────────────────────────────────────
     // Route MCP tools to buildMCPToolPayload
     const isMCPTool = tool_name.startsWith('mcp__');
@@ -455,6 +477,9 @@ export async function handleToolCall(req: Request, res: Response) {
           spawnMethod:     spawnMethod,
           sessionId:       session_id,
           spawnCount:      subagentContextStore.get(session_id)?.spawn_count || 1,
+          isIntentDrift:   is_intent_drift,
+          intentTier:      intentTier,
+          intentDriftScore: intent_drift_score,
           hitlAcknowledged,
           scores:          { ...result.scores, trust_score: result.trust_score },
           prompt:          query,
@@ -671,7 +696,7 @@ export async function handleToolCall(req: Request, res: Response) {
           // Rebuild payload with hitlAcknowledged: true and re-evaluate
           const approvedPayload = (client_source === 'claude-code' && isMCPTool)
             ? buildMCPToolPayload({ osUser: user_email, projectName: derivedProject, toolName: mcpTool, serverName: mcpServer, agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId, pipCtx })
-            : buildFileOperationPayload({ osUser: user_email, projectName: derivedProject, toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId, pipCtx });
+            : buildFileOperationPayload({ osUser: user_email, projectName: derivedProject, toolName: tool_name, filePath: req.body?.tool_input?.file_path || req.body?.tool_input?.path || req.body?.tool_input?.pattern || req.body?.tool_input?.regex || '', command: req.body?.tool_input?.command || '', agentType: derivedAgentType, sessionId: session_id, hitlAcknowledged: true, isIntentDrift: is_intent_drift, intentTier: intentTier, intentDriftScore: intent_drift_score, scores: { ...result.scores, trust_score: result.trust_score }, prompt: query, prompt_history: promptHistory, spiffeId, pipCtx });
 
           const approvedCedar = await evaluateCedar(approvedPayload);
 

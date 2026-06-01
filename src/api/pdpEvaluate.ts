@@ -440,6 +440,9 @@ export function buildFileOperationPayload(params: {
   declaredScope?:   string;
   initialScope?:    string;
   spawnMethod?:     string;
+  isIntentDrift?:   boolean;
+  intentTier?:      string;
+  intentDriftScore?: number;
 }) {
   const fileZone   = resolveFileZone(params.filePath || params.command || '');
   const cedarAction = mapToolToAction(params.toolName);
@@ -502,6 +505,11 @@ export function buildFileOperationPayload(params: {
       approver_consent: params.hitlAcknowledged,
       command:          sanitizedCommand,
       command_risk:     classifyCommand(params.command || ''),
+      ...(isCommand ? {
+        is_intent_drift:    params.isIntentDrift ?? false,
+        intent_drift_score: params.intentDriftScore ?? 0,
+        intent_tier:        params.intentTier ?? 'safe',
+      } : {}),
       trust_score:      params.scores.trust_score       ?? 70,
       injection_score:  params.scores.injection_score   ?? 0,
       escalation_score: params.scores.escalation_score  ?? 0,
