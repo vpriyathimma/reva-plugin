@@ -111,6 +111,30 @@ import { claudeSessionUserStore } from './connector/hooks/onSessionStart';
 // Dedupe file-content injection scans — one block per (session, file) so repeated
 // PostToolBatch posts don't crater trust for the same payload.
 const scannedFileInjections = new Set<string>();
+
+// Reva must detect injected content regardless of HOW an agent ingested it.
+// Coupling the scan to the Read tool let payloads through via Bash `cat`/`grep`
+// (tool_name is "Bash", so they were never scanned, and the path lives in
+// tool_input.command not file_path). This returns the response text + a source
+// label for any file-read — Read tool OR a Bash read command — so the same
+// injection classifier runs over all ingested file content.
+const FILE_READ_CMD = /\b(cat|head|tail|less|more|nl|strings|cut|sed|grep|egrep|fgrep|rg|awk|od|xxd)\b|\bgit\s+(show|diff|log)\b/;
+function extractIngestedContent(c: any): { content: string; src: string } | null {
+  const tool = c?.tool_name || '';
+  const resp = typeof c?.tool_response === 'string' ? c.tool_response : '';
+  if (!resp) return null;
+  if (/^read/i.test(tool)) {
+    const fp = c?.tool_input?.file_path || c?.tool_input?.path || '';
+    return { content: resp, src: fp || 'read' };
+  }
+  if (/^bash$/i.test(tool)) {
+    const cmd = typeof c?.tool_input?.command === 'string' ? c.tool_input.command : '';
+    if (!cmd || !FILE_READ_CMD.test(cmd)) return null;
+    const m = cmd.match(/\/[^\s"'|>;&]+/);          // first absolute-path token
+    return { content: resp, src: (m && m[0]) || cmd.slice(0, 60) };
+  }
+  return null;
+}
 app.post('/api/pdp/hook', async (req, res) => {
   const event = req.body?.hook_event_name || 'unknown';
   const session_id = req.body?.session_id || '';
@@ -122,17 +146,17 @@ app.post('/api/pdp/hook', async (req, res) => {
 
   // PostToolBatch — scan content an agent READ for prompt injection. The payload
   // lives in file content, not the user prompt, so it never reaches SubmitPrompt.
-  // Here we run the same injection classifier over each Read tool_response; on a hit
-  // we record a prompt_injection block (trust −15) and log a Cedar SubmitPrompt
-  // decision — identical to UserPromptSubmit. This fires whether or not Claude acts
-  // on the payload, so an injection Claude refuses still lands in the decisions feed.
+  // Here we run the same injection classifier over every file-read tool_response —
+  // Read tool OR Bash read (cat/grep/head/…) — on a hit we record a prompt_injection
+  // block (trust −15) and log a Cedar SubmitPrompt decision, identical to
+  // UserPromptSubmit. This fires whether or not Claude acts on the payload, so an
+  // injection Claude refuses still lands in the decisions feed.
   if (event === 'PostToolBatch') {
     const calls = Array.isArray(req.body?.tool_calls) ? req.body.tool_calls : [];
     for (const c of calls) {
-      if (!/^read/i.test(c?.tool_name || '')) continue;
-      const content = typeof c?.tool_response === 'string' ? c.tool_response : '';
-      if (!content) continue;
-      const fp = c?.tool_input?.file_path || c?.tool_input?.path || '';
+      const ingested = extractIngestedContent(c);
+      if (!ingested) continue;
+      const { content, src: fp } = ingested;
       const dedupeKey = `${session_id}::${fp}`;
       if (scannedFileInjections.has(dedupeKey)) continue;
 
