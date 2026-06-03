@@ -148,17 +148,10 @@ const pendingSpawns = new Map<string, PendingSpawn[]>();           // session �
 export const boundAgents = new Map<string, AgentIdentity>();        // `${session}::${agent_id}` → identity
 const identKey = (session_id: string, agent_id: string) => `${session_id}::${agent_id}`;
 
-// Main agent gets a stable per-session SPIFFE identity (minted once, reused). The
-// principal stays the human Developer; this id rides in context so every main-agent
-// action is attributable, just like a subagent's runtime agent_id.
-const mainSpiffeIds = new Map<string, string>();
-export function mainSpiffeId(session_id: string, osUser: string): string {
-  const existing = mainSpiffeIds.get(session_id);
-  if (existing) return existing;
-  const id = `spiffe://reva/claude-code/${osUser || 'unknown'}/${session_id.slice(0, 8)}`;
-  mainSpiffeIds.set(session_id, id);
-  return id;
-}
+// The main agent's id is the REAL registered identity established at SessionStart
+// (sessionStore.agent_id = the SPIRE-issued spiffe_id when SPIRE is running, else
+// the device-derived agent-<hash> fallback). We never synthesize an identity here —
+// it is looked up and passed in, so context matches what the dashboard registered.
 
 export function enqueueSpawn(session_id: string, spawn: { agent_name: string; declared_scope: string; initial_scope: string }): void {
   const q = pendingSpawns.get(session_id) || [];
@@ -193,10 +186,10 @@ export function resolveSubagent(session_id: string, agent_id: string): AgentIden
   return boundAgents.get(identKey(session_id, agent_id)) || bindSpawnToAgent(session_id, agent_id)!;
 }
 
-export function resolveMain(session_id: string, runtimeName: string, initial_scope: string, osUser: string, declared_scope: string): AgentIdentity {
+export function resolveMain(session_id: string, runtimeName: string, initial_scope: string, declared_scope: string, agentId: string): AgentIdentity {
   return {
     agent_type:        'main',
-    agent_id:          mainSpiffeId(session_id, osUser),
+    agent_id:          agentId || '',
     agent_name:        runtimeName || 'claude-code',
     declared_scope:    declared_scope || initial_scope || '',
     initial_scope:     initial_scope || '',
@@ -402,7 +395,7 @@ export async function handleToolCall(req: Request, res: Response) {
     const isSubagentCall   = !isSpawnAgent && !!bodyAgentId;
     const identity         = isSubagentCall
       ? resolveSubagent(session_id, bodyAgentId)
-      : resolveMain(session_id, agentName, sessionIntentStore.get(session_id)?.initial_scope || '', user_email, query);
+      : resolveMain(session_id, agentName, sessionIntentStore.get(session_id)?.initial_scope || '', query, enrolledSession?.agent_id || '');
 
     const derivedAgentType = identity.agent_type;          // 'main' | 'subagent'
     const derivedAgentName = displayName(identity);        // e.g. code-reviewer#a3c2fcf6
