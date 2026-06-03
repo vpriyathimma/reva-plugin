@@ -423,17 +423,25 @@ export async function handleToolCall(req: Request, res: Response) {
       || req.body?.tool_input?.url
       || '';
     const intentTier   = promptIntent;   // informational label (read/write/...), kept for the existing context field
-    const { is_intent_drift, intent_drift_score } = checkIntentDrift({
+    const drift = checkIntentDrift({
       target:         String(actionTarget),
       tool_name,
       declared_scope: declaredScope,
       initial_scope:  initialScope,
     });
+    const { is_intent_drift, intent_drift_score } = drift;
     if (is_intent_drift) {
-      const blk = { type: 'intent_drift' as const, prompt: String(actionTarget).slice(0, 200), score: intent_drift_score, timestamp: new Date().toISOString() };
-      recordBlock(user_email, blk);                                              // roll up to session/developer trust
-      if (agentIdForCtx && derivedAgentType === 'subagent') recordBlock(agentIdForCtx, blk);  // per-agent trust (subagents)
-      console.log(`[Drift] agent="${derivedAgentName}" asked="${(declaredScope || initialScope).slice(0, 60)}" target="${String(actionTarget).slice(0, 60)}" → NOT-ASKED drift=${intent_drift_score}`);
+      const kind = drift.reduces_trust ? 'operation' : 'scope';
+      // Scope drift (out-of-scope target, still a read) → Cedar denies on
+      // is_intent_drift, but NO trust penalty (containment, not a trust signal).
+      // Drastic drift (mutate when only a read was asked) → deny AND erode trust,
+      // like a prompt injection.
+      if (drift.reduces_trust) {
+        const blk = { type: 'intent_drift' as const, prompt: String(actionTarget).slice(0, 200), score: intent_drift_score, timestamp: new Date().toISOString() };
+        recordBlock(user_email, blk);
+        if (agentIdForCtx && derivedAgentType === 'subagent') recordBlock(agentIdForCtx, blk);
+      }
+      console.log(`[Drift] kind=${kind} agent="${derivedAgentName}" asked="${(declaredScope || initialScope).slice(0, 50)}" target="${String(actionTarget).slice(0, 50)}" → deny${drift.reduces_trust ? ` + trust-${intent_drift_score}` : ' (no trust hit)'}`);
     }
 
     // ── Cedar PDP evaluation ──────────────────────────────────────

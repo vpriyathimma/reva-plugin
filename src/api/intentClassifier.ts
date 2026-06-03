@@ -380,16 +380,41 @@ function actionTargetTokens(target: string): Set<string> {
   return out;
 }
 
+// Did the developer's request itself ask to CHANGE something? If they asked to
+// edit/delete/write, a mutating action is in scope. If they only asked to
+// read/review, a mutating action is DRASTIC drift.
+const ASKED_MUTATE = /\b(edit|edits|edited|editing|update|updates|updated|updating|modify|modifies|modified|modifying|change|changes|changed|remove|removes|removed|removing|delete|deletes|deleted|deleting|drop|drops|write|writes|writing|create|creates|created|add|adds|added|fix|fixes|fixed|refactor|refactors|rename|renames|install|installs|deploy|deploys|push|pushes|commit|commits|merge|merges|rewrite|patch|append)\b/i;
+
+// Does THIS action mutate state (vs. read/inspect)?
+const MUTATING_TOOL = /^(edit|write|multiedit|notebookedit|str_replace|create_file)$/i;
+const MUTATING_CMD  = /\b(rm|rmdir|mv|cp|mkdir|touch|truncate|dd|tee|chmod|chown|ln|shred)\b|\bsed\s+-i\b|\bgit\s+(commit|push|merge|rebase|reset|stash|tag|cherry-pick)\b|\b(npm|yarn|pnpm|pip|pip3|gem|cargo|go|apt|brew)\s+(install|add|remove|uninstall)\b/i;
+function isMutatingAction(tool_name: string, target: string): boolean {
+  if (MUTATING_TOOL.test(tool_name || '')) return true;
+  return MUTATING_CMD.test(target || '');   // for Bash, target is the command
+}
+
 export function checkIntentDrift(params: {
   target:         string;   // file_path | bash command | url the action operates on
   tool_name?:     string;
   declared_scope: string;   // the prompt that drove this action
   initial_scope:  string;   // the originating prompt
-}): { is_intent_drift: boolean; intent_drift_score: number } {
+}): { is_intent_drift: boolean; intent_drift_score: number; reduces_trust: boolean } {
+  const askedMutate  = ASKED_MUTATE.test(`${params.declared_scope || ''} ${params.initial_scope || ''}`);
+  const actionMutate = isMutatingAction(params.tool_name || '', params.target || '');
+
+  // Drastic drift — developer asked to read/review, agent MUTATES (edit/update/
+  // remove/delete/write). Denied AND erodes trust, like a prompt injection.
+  if (!askedMutate && actionMutate) {
+    return { is_intent_drift: true, intent_drift_score: 90, reduces_trust: true };
+  }
+
+  // Scope drift — action targets a resource the developer never asked for (a
+  // different folder / host). Denied, but NO trust penalty — it's containment, not
+  // a trust signal. An unspecific ask ("list my files") names no target → no drift.
   const asked = new Set<string>([...scopeTokens(params.declared_scope), ...scopeTokens(params.initial_scope)]);
-  if (asked.size === 0) return { is_intent_drift: false, intent_drift_score: 0 };   // unspecific ask — nothing to violate
+  if (asked.size === 0) return { is_intent_drift: false, intent_drift_score: 0, reduces_trust: false };
   const target = actionTargetTokens(params.target);
-  if (target.size === 0) return { is_intent_drift: false, intent_drift_score: 0 };  // no concrete target (e.g. spawn)
-  for (const tok of target) if (asked.has(tok)) return { is_intent_drift: false, intent_drift_score: 0 };
-  return { is_intent_drift: true, intent_drift_score: 90 };                          // target never referenced in the ask
+  if (target.size === 0) return { is_intent_drift: false, intent_drift_score: 0, reduces_trust: false };
+  for (const tok of target) if (asked.has(tok)) return { is_intent_drift: false, intent_drift_score: 0, reduces_trust: false };
+  return { is_intent_drift: true, intent_drift_score: 50, reduces_trust: false };
 }

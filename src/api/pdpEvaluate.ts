@@ -505,9 +505,9 @@ export function buildFileOperationPayload(params: {
       approver_consent: params.hitlAcknowledged,
       command:          sanitizedCommand,
       command_risk:     classifyCommand(params.command || ''),
+      is_intent_drift:    params.isIntentDrift ?? false,
+      intent_drift_score: params.intentDriftScore ?? 0,
       ...(isCommand ? {
-        is_intent_drift:    params.isIntentDrift ?? false,
-        intent_drift_score: params.intentDriftScore ?? 0,
         intent_tier:        params.intentTier ?? 'safe',
       } : {}),
       trust_score:      params.scores.trust_score       ?? 70,
