@@ -579,10 +579,21 @@ export function buildClaudeCodeInjectionPayload(params: {
   trustScore:    number;
   spiffeId?:     string;
   pipCtx?:       any;
+  agentType?:        string;   // 'subagent' when the injected file was read by a subagent; else main
+  agentId?:          string;
+  agentName?:        string;
+  parentSessionId?:  string;
+  declaredScope?:    string;
+  initialScope?:     string;
+  sourcePath?:       string;   // the file the agent read that carried the payload
+  intentTier?:       string;
 }) {
   const detection = params.isInjection ? 'prompt-injection' : 'jailbreak-attempt';
+  const fileZone  = resolveFileZone(params.sourcePath || '');
   return {
-    principal: buildDeveloperPrincipal(params.osUser, 'main'),
+    // Attribute to whoever actually ingested the payload: a subagent read →
+    // Agent::<osUser>:<agent_id>; a main-agent read → Developer::<osUser>.
+    principal: buildDeveloperPrincipal(params.osUser, params.agentType || 'main', params.agentId, params.agentName, params.parentSessionId),
     action: { name: 'SubmitPrompt' },
     resource: {
       type: 'Prompt',
@@ -598,11 +609,25 @@ export function buildClaudeCodeInjectionPayload(params: {
       session_id:       params.sessionId,
       session_trace_id: getOrCreateSessionTrace(params.sessionId),
       bypass_attempt:   false,
+      // Identity of the reader (parity with RunBash decisions)
+      agent_type:       params.agentType || 'main',
+      agent_name:       params.agentName || params.agentType || 'main',
+      agent_id:         params.agentId || '',
+      parent_session_id: params.parentSessionId || '',
+      declared_scope:   params.declaredScope || '',
+      initial_scope:    params.initialScope || '',
+      tool_name:        'Read',
+      file_path:        params.sourcePath || '',
+      file_zone:        fileZone,
+      command_risk:     'safe',
+      intent_tier:      params.intentTier || 'read',
       prompt_snippet:   params.prompt.slice(0, 200),
       prompt:           params.prompt,
       prompt_history:   (params.promptHistory || []).slice(-3).join(' | '),
       injection_score:  params.scores.injection_score ?? 0,
       jailbreak_score:  params.scores.jailbreak_score ?? 0,
+      escalation_score: params.scores.escalation_score ?? 0,
+      exfiltration_score: params.scores.exfiltration_score ?? 0,
       is_injection:     params.isInjection,
       is_jailbreak:     params.isJailbreak,
       trust_score:      params.trustScore ?? 70,

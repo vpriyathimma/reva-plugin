@@ -104,8 +104,10 @@ app.use('/api', hitlRouter);
 // Generic hook handler — all 26 Claude Code lifecycle hooks
 import { logDecision } from './connector/discovery/enroll';
 import { recordBlock, classifyPrompt, getPersistentTrust } from './api/intentClassifier';
-import { bindSpawnToAgent, extractAgentId, displayName } from './connector/hooks/beforeToolCall';
+import { bindSpawnToAgent, extractAgentId, displayName, resolveSubagent } from './connector/hooks/beforeToolCall';
 import { evaluateCedar, buildClaudeCodeInjectionPayload } from './api/pdpEvaluate';
+import { getPIPContext } from './api/pip';
+import { sessionIntentStore } from './connector/hooks/beforePrompt';
 import { claudeSessionUserStore } from './connector/hooks/onSessionStart';
 
 // Dedupe file-content injection scans — one block per (session, file) so repeated
@@ -138,7 +140,7 @@ function extractIngestedContent(c: any): { content: string; src: string } | null
 app.post('/api/pdp/hook', async (req, res) => {
   const event = req.body?.hook_event_name || 'unknown';
   const session_id = req.body?.session_id || '';
-  const user_email = req.body?.env?.USER || claudeSessionUserStore.get(session_id) || '';
+  const user_email = req.body?.env?.USER || claudeSessionUserStore.get(session_id) || (req.headers['x-os-user'] as string) || '';
   const ts = new Date().toISOString();
 
   // Full body — no truncation (per-agent id / lifecycle payload investigation)
@@ -153,6 +155,22 @@ app.post('/api/pdp/hook', async (req, res) => {
   // injection Claude refuses still lands in the decisions feed.
   if (event === 'PostToolBatch') {
     const calls = Array.isArray(req.body?.tool_calls) ? req.body.tool_calls : [];
+    // Resolve WHO read the files in this batch — Claude Code stamps the subagent's
+    // agent_id/agent_type on the batch body (absent for the main agent). Drives the
+    // injection principal + decision-log Principal cell: subagent → Agent::os:id,
+    // main → Developer::os. Built inline (no spawn-queue side effects in the hook path).
+    const batchAgentId   = req.body?.agent_id || '';
+    const batchAgentKind = batchAgentId ? 'subagent' : 'main';
+    const batchAgentName = batchAgentId
+      ? `${req.body?.agent_type || 'subagent'}#${String(batchAgentId).slice(0, 8)}`
+      : (req.body?.agent_type || 'claude-code');
+    // What the reader was asked to do + its PIP, so the injection decision carries
+    // the same context as a RunBash decision (identity, scope, git/jira, zone).
+    const batchPip      = getPIPContext(user_email);
+    const batchSub      = batchAgentId ? resolveSubagent(session_id, batchAgentId) : undefined;
+    const batchSI       = sessionIntentStore.get(session_id);
+    const batchDeclared = batchSub?.declared_scope || batchSI?.prompt || '';
+    const batchInitial  = batchSub?.initial_scope  || batchSI?.initial_scope || batchSI?.prompt || '';
     for (const c of calls) {
       const ingested = extractIngestedContent(c);
       if (!ingested) continue;
@@ -186,6 +204,14 @@ app.post('/api/pdp/hook', async (req, res) => {
           isJailbreak,
           scores:        result.scores,
           trustScore:    getPersistentTrust(user_email),
+          agentType:       batchAgentKind,
+          agentId:         batchAgentId,
+          agentName:       batchAgentName,
+          parentSessionId: session_id,
+          declaredScope:   batchDeclared,
+          initialScope:    batchInitial,
+          sourcePath:      fp,
+          pipCtx:          batchPip,
         }));
       } catch (e: any) {
         console.error('[FileInjection:Cedar] SubmitPrompt eval failed:', e.message);
@@ -204,7 +230,7 @@ app.post('/api/pdp/hook', async (req, res) => {
         trust_score:  getPersistentTrust(user_email),
         scores:       result.scores,
         prompt:       content.slice(0, 200),
-        agent_type:   'subagent',
+        agent_type:   batchAgentKind,
       });
       console.log(`[FileInjection] ${detection} in ${fp} session=${session_id} score=${result.scores.injection_score} decision=${cedarResult?.decision ?? 'error'} trust=${getPersistentTrust(user_email)}`);
     }

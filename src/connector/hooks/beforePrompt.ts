@@ -90,10 +90,10 @@ export async function handlePromptSubmit(req: Request, res: Response) {
       prompt:         prompt.slice(0, 500),
       prompt_history: history.slice(-3),
       prior_intents:  priorIntents,
-      // Phase 2 — initial task scope = the FIRST prompt's intent for this session.
-      // Derived from the prompt (classifier), not hardcoded; subsequent prompts
-      // don't overwrite it, so it stays the originating scope / ceiling.
-      initial_scope:  prevIntent?.initial_scope || result.intent,
+      // Scope = the prompt the developer actually entered this turn. Drift is
+      // measured against what was asked here (and the spawn task for subagents),
+      // not a value frozen at the session's first prompt.
+      initial_scope:  prompt.slice(0, 500),
       timestamp:      new Date().toISOString(),
     });
 

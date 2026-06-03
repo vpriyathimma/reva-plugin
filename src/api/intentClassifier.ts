@@ -321,65 +321,75 @@ export function getPersistentTrust(osUser: string): number {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 4 — Intent drift, expressed entirely in the existing command-tier
-// taxonomy (safe / restricted / destructive). No separate classification.
+// Intent drift = the agent did something the developer didn't ask for.
 //
-// An agent's *intent* resolves to the highest command tier it is allowed to reach.
-// Drift = the command it actually issues outranks that tier. Applies to every
-// agent (main and spawned): if the originating intent is read/explore (safe) and
-// any agent in the tree runs a restricted/destructive command, that is drift.
+// NOT about risk tier. A developer who asks "remove the changelog" and gets it
+// removed has no drift, even though that's destructive. A subagent told to
+// "review docs and tests" that reads src/ HAS drift, even though reading is safe.
+// We compare the resource THIS action targets against what was actually asked in
+// declared_scope (the prompt that drove this action) ∪ initial_scope (the
+// originating prompt). If the target isn't referenced in the ask, it's drift.
 //
-// The intent→tier resolver is a PLUG-AND-PLAY engine. Swap our default for any
-// external engine (local model, HTTP service, your own) via setIntentEngine();
-// the drift/PDP path only ever calls resolveIntentTier() + compareTiers().
+// An unspecific ask ("list my files") names no concrete target, so nothing can be
+// "outside" it — no drift is raised. Drift fires only when the ask names targets
+// and the action reaches outside them. Same mechanism for files (src vs
+// docs/tests) and hosts/resources (staging vs local DB).
 // ─────────────────────────────────────────────────────────────────────────────
-export type CommandTier = 'safe' | 'restricted' | 'destructive';
-const TIER_RANK: Record<CommandTier, number> = { safe: 0, restricted: 1, destructive: 2 };
 
-export interface IntentEngineInput {
-  prompt?:        string;
-  declared_scope?: string;
-  initial_scope?: string;
-  agent_name?:    string;   // e.g. Claude Code's "explore" / "general-purpose"
-  agent_type?:    string;
-}
-export interface IntentEngine {
-  resolveIntentTier(input: IntentEngineInput): CommandTier;
-}
+// Generic words carrying no target identity — stripped from BOTH the ask and the
+// action target, so the comparison turns on the distinctive qualifier
+// (src vs docs, staging vs local), not the shared type noun (file, db, folder).
+const SCOPE_STOPWORDS = new Set<string>([
+  'the','a','an','and','or','to','of','in','on','for','with','my','me','our','your','this','that','these','those','it','all','some','any',
+  'please','also','then','just','from','into','at','by','as','is','are','be','do','can','could','would','should','let','lets','will',
+  'review','read','list','show','summarize','summarise','check','inspect','audit','analyze','analyse','explore','look','examine','understand','explain','describe','find','search','get','see','give','tell','report','current','state','status',
+  'remove','delete','drop','edit','write','update','modify','change','fix','create','add','make','build','connect','run','open','use',
+  'file','files','folder','folders','directory','directories','dir','db','database','server','servers','repo','repository','project','code','codebase','contents','content','here','data',
+  'spawn','multiple','agents','agent','subagent','subagents','parallel','task','tasks','them','each','both','few','several','about','what','which','where',
+]);
 
-// Default heuristic — reads agent_name + scopes, NOT just the literal prompt verb
-// (Claude Code maps "review files" to an "explore" agent, etc.). Exploratory /
-// read intents permit only `safe`; explicit mutation intents permit `restricted`;
-// explicit destructive intents permit `destructive`.
-const READ_SIGNALS      = /\b(read|review|explore|inspect|audit|summar|analy|list|search|find|look|examine|understand|check|explain|describe|general-purpose)\b/i;
-const MUTATE_SIGNALS     = /\b(edit|write|update|modify|change|fix|refactor|create|add|implement|build|install|deploy|push|commit|migrate|format|lint)\b/i;
-const DESTRUCTIVE_SIGNALS = /\b(delete|remove|drop|destroy|wipe|reset|rm\b|purge|truncate|revert)\b/i;
-
-const defaultIntentEngine: IntentEngine = {
-  resolveIntentTier({ prompt, declared_scope, initial_scope, agent_name }) {
-    const hay = `${agent_name || ''} ${initial_scope || ''} ${declared_scope || ''} ${prompt || ''}`.toLowerCase();
-    if (DESTRUCTIVE_SIGNALS.test(hay)) return 'destructive';
-    // Mutation intent counts only if it isn't dominated by a read/explore framing.
-    if (MUTATE_SIGNALS.test(hay) && !READ_SIGNALS.test(hay)) return 'restricted';
-    return 'safe';
-  },
-};
-
-let intentEngine: IntentEngine = defaultIntentEngine;
-export function setIntentEngine(engine: IntentEngine): void { intentEngine = engine; }
-export function getIntentEngine(): IntentEngine { return intentEngine; }
-export function resolveIntentTier(input: IntentEngineInput): CommandTier {
-  try { return intentEngine.resolveIntentTier(input); } catch { return 'safe'; }
+function scopeTokens(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const raw of (text || '').toLowerCase().split(/[^a-z0-9.]+/)) {
+    const norm = raw.replace(/^[._]+|[._]+$/g, '');
+    if (!norm || SCOPE_STOPWORDS.has(norm)) continue;
+    out.add(norm);
+    const stem = norm.split('.')[0];                          // app.js → app
+    if (stem && stem !== norm && !SCOPE_STOPWORDS.has(stem)) out.add(stem);
+    if (norm === 'test' || norm === 'tests') { out.add('test'); out.add('tests'); }
+  }
+  return out;
 }
 
-// Drift = command tier outranks intent tier. Score mirrors injection_score (0–100,
-// >50 ⇒ drift) so trust/penalty handling is uniform across signal types.
-export function computeIntentDrift(
-  commandTier: CommandTier,
-  intentTier: CommandTier,
-): { is_intent_drift: boolean; intent_drift_score: number } {
-  const gap = TIER_RANK[commandTier] - TIER_RANK[intentTier];
-  if (gap <= 0) return { is_intent_drift: false, intent_drift_score: 0 };
-  // gap 1 (e.g. safe→restricted) = 60; gap 2 (safe→destructive) = 90
-  return { is_intent_drift: true, intent_drift_score: gap >= 2 ? 90 : 60 };
+// The resource a tool call targets — pulled from a file path, a bash command's
+// path/host args, or a URL. Path tails (last two segments) are used so the home/
+// project prefix (/Users/<me>/<project>/...) doesn't leak generic tokens.
+function actionTargetTokens(target: string): Set<string> {
+  if (!target) return new Set();
+  const candidates = /\s/.test(target)
+    ? target.split(/\s+/).filter(a => a && !a.startsWith('-') && (a.includes('/') || a.includes('.') || a.includes(':')))
+    : [target];
+  const list = candidates.length ? candidates : [target];
+  const out = new Set<string>();
+  for (const c of list) {
+    let frag = c.includes('://') ? (c.split('://')[1] || c) : c;
+    const segs = frag.split('/').filter(Boolean);
+    const tail = (segs.length ? segs.slice(-2) : [frag]).join(' ');
+    for (const tok of scopeTokens(tail)) out.add(tok);
+  }
+  return out;
+}
+
+export function checkIntentDrift(params: {
+  target:         string;   // file_path | bash command | url the action operates on
+  tool_name?:     string;
+  declared_scope: string;   // the prompt that drove this action
+  initial_scope:  string;   // the originating prompt
+}): { is_intent_drift: boolean; intent_drift_score: number } {
+  const asked = new Set<string>([...scopeTokens(params.declared_scope), ...scopeTokens(params.initial_scope)]);
+  if (asked.size === 0) return { is_intent_drift: false, intent_drift_score: 0 };   // unspecific ask — nothing to violate
+  const target = actionTargetTokens(params.target);
+  if (target.size === 0) return { is_intent_drift: false, intent_drift_score: 0 };  // no concrete target (e.g. spawn)
+  for (const tok of target) if (asked.has(tok)) return { is_intent_drift: false, intent_drift_score: 0 };
+  return { is_intent_drift: true, intent_drift_score: 90 };                          // target never referenced in the ask
 }

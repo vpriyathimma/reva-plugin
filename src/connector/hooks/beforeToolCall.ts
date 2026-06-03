@@ -1,6 +1,6 @@
 import { Request, Response }     from 'express';
 import { classifyToolCall }      from '../../api/intentClassifier';
-import { getBlockTrustPenalty, getBlocks, getBlockCount, recordBlock, resolveIntentTier, computeIntentDrift } from '../../api/intentClassifier';
+import { getBlockTrustPenalty, getBlocks, getBlockCount, recordBlock, checkIntentDrift } from '../../api/intentClassifier';
 import { logDecision }           from '../discovery/enroll';
 import { sessionIntentStore }    from './beforePrompt';
 import { sessionStore }          from '../discovery/enroll';
@@ -148,6 +148,18 @@ const pendingSpawns = new Map<string, PendingSpawn[]>();           // session �
 export const boundAgents = new Map<string, AgentIdentity>();        // `${session}::${agent_id}` → identity
 const identKey = (session_id: string, agent_id: string) => `${session_id}::${agent_id}`;
 
+// Main agent gets a stable per-session SPIFFE identity (minted once, reused). The
+// principal stays the human Developer; this id rides in context so every main-agent
+// action is attributable, just like a subagent's runtime agent_id.
+const mainSpiffeIds = new Map<string, string>();
+export function mainSpiffeId(session_id: string, osUser: string): string {
+  const existing = mainSpiffeIds.get(session_id);
+  if (existing) return existing;
+  const id = `spiffe://reva/claude-code/${osUser || 'unknown'}/${session_id.slice(0, 8)}`;
+  mainSpiffeIds.set(session_id, id);
+  return id;
+}
+
 export function enqueueSpawn(session_id: string, spawn: { agent_name: string; declared_scope: string; initial_scope: string }): void {
   const q = pendingSpawns.get(session_id) || [];
   q.push({ ...spawn, spawned_at: new Date().toISOString() });
@@ -181,12 +193,12 @@ export function resolveSubagent(session_id: string, agent_id: string): AgentIden
   return boundAgents.get(identKey(session_id, agent_id)) || bindSpawnToAgent(session_id, agent_id)!;
 }
 
-export function resolveMain(session_id: string, runtimeName: string, initial_scope: string): AgentIdentity {
+export function resolveMain(session_id: string, runtimeName: string, initial_scope: string, osUser: string, declared_scope: string): AgentIdentity {
   return {
     agent_type:        'main',
-    agent_id:          '',
+    agent_id:          mainSpiffeId(session_id, osUser),
     agent_name:        runtimeName || 'claude-code',
-    declared_scope:    '',
+    declared_scope:    declared_scope || initial_scope || '',
     initial_scope:     initial_scope || '',
     spawn_method:      'main',
     parent_session_id: session_id,
@@ -390,7 +402,7 @@ export async function handleToolCall(req: Request, res: Response) {
     const isSubagentCall   = !isSpawnAgent && !!bodyAgentId;
     const identity         = isSubagentCall
       ? resolveSubagent(session_id, bodyAgentId)
-      : resolveMain(session_id, agentName, sessionIntentStore.get(session_id)?.initial_scope || '');
+      : resolveMain(session_id, agentName, sessionIntentStore.get(session_id)?.initial_scope || '', user_email, query);
 
     const derivedAgentType = identity.agent_type;          // 'main' | 'subagent'
     const derivedAgentName = displayName(identity);        // e.g. code-reviewer#a3c2fcf6
@@ -405,21 +417,30 @@ export async function handleToolCall(req: Request, res: Response) {
     // compare to the tier of the bash command it is actually issuing. Drift = the
     // command outranks the intent (e.g. review/explore intent → destructive curl).
     // Applies to main and subagents alike; enforced by Cedar CC-FORBID-INTENT-DRIFT.
-    const driftCommand = req.body?.tool_input?.command || '';
-    const commandTier  = driftCommand ? classifyCommand(driftCommand) : 'safe';
-    const intentTier   = resolveIntentTier({
-      prompt:         query,
+    // ── Intent drift — conformance, not risk tier ───────────────────────────
+    // Drift = the agent did something the developer didn't ask for. Compare the
+    // resource this action targets (file path / bash path arg / URL host) against
+    // what was asked in declared_scope (the prompt driving this action) ∪
+    // initial_scope (the originating prompt). A destructive op the developer asked
+    // for is NOT drift; a benign read of a resource never asked for IS drift.
+    // Applies to main and subagents alike.
+    const actionTarget = req.body?.tool_input?.file_path
+      || req.body?.tool_input?.path
+      || req.body?.tool_input?.command
+      || req.body?.tool_input?.url
+      || '';
+    const intentTier   = promptIntent;   // informational label (read/write/...), kept for the existing context field
+    const { is_intent_drift, intent_drift_score } = checkIntentDrift({
+      target:         String(actionTarget),
+      tool_name,
       declared_scope: declaredScope,
       initial_scope:  initialScope,
-      agent_name:     derivedAgentName,
-      agent_type:     derivedAgentType,
     });
-    const { is_intent_drift, intent_drift_score } = computeIntentDrift(commandTier, intentTier);
     if (is_intent_drift) {
-      const blk = { type: 'intent_drift' as const, prompt: driftCommand.slice(0, 200), score: intent_drift_score, timestamp: new Date().toISOString() };
-      recordBlock(user_email, blk);                          // roll up to session/developer trust
-      if (agentIdForCtx) recordBlock(agentIdForCtx, blk);    // per-agent trust (subagents)
-      console.log(`[Drift] agent="${derivedAgentName}" intent=${intentTier} command=${commandTier} cmd="${driftCommand.slice(0, 80)}" → DRIFT score=${intent_drift_score}`);
+      const blk = { type: 'intent_drift' as const, prompt: String(actionTarget).slice(0, 200), score: intent_drift_score, timestamp: new Date().toISOString() };
+      recordBlock(user_email, blk);                                              // roll up to session/developer trust
+      if (agentIdForCtx && derivedAgentType === 'subagent') recordBlock(agentIdForCtx, blk);  // per-agent trust (subagents)
+      console.log(`[Drift] agent="${derivedAgentName}" asked="${(declaredScope || initialScope).slice(0, 60)}" target="${String(actionTarget).slice(0, 60)}" → NOT-ASKED drift=${intent_drift_score}`);
     }
 
     // ── Cedar PDP evaluation ──────────────────────────────────────
