@@ -312,10 +312,12 @@ import { securityConfigRouter } from './api/securityConfig';
 import { quarantineRouter }     from './api/quarantine';
 import { streamRouter }         from './api/stream';
 import { ruleConfigRouter }     from './api/ruleConfig';
+import { approverConfigRouter } from './api/approverConfig';
 app.use('/api', securityConfigRouter);
 app.use('/api', quarantineRouter);
 app.use('/api', streamRouter);
 app.use('/api', ruleConfigRouter);
+app.use('/api', approverConfigRouter);
 
 // Classification config routes
 import { getCommandRules, setCommandRules, getFileZoneRules, setFileZoneRules } from './api/pdpEvaluate';

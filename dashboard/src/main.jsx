@@ -22,7 +22,7 @@ const RevaStore = {
   state: {
     loading: true,
     sessions: [], decisions: [], quarantine: { quarantined: [], policies: [], capped_sessions: [], spawn_limit: 5 },
-    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [],
+    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [], approvers: [], approverMap: {},
   },
   subs: new Set(),
   set(patch) { this.state = { ...this.state, ...patch }; this.subs.forEach((f) => f()); },
@@ -58,14 +58,15 @@ async function revaRefetch() {
 }
 
 async function revaLoadConfigs() {
-  const [sec, hitl, cmd, fz, mcp] = await Promise.all([
+  const [sec, hitl, cmd, fz, mcp, appr] = await Promise.all([
     jget("/api/config/security").catch(() => null),
     jget("/api/config/hitl").catch(() => null),
     jget("/api/config/commands").catch(() => ({ rules: [] })),
     jget("/api/config/filezones").catch(() => ({ rules: [] })),
     jget("/api/mcp-discovery").catch(() => ({ servers: [] })),
+    jget("/api/config/approvers").catch(() => ({ approvers: [], map: {} })),
   ]);
-  RevaStore.set({ security: sec, hitl, commands: cmd || { safe: [], restricted: [], destructive: [] }, filezones: (fz && fz.zones) || [], mcp: mcp.servers || [] });
+  RevaStore.set({ security: sec, hitl, commands: cmd || { safe: [], restricted: [], destructive: [] }, filezones: (fz && fz.zones) || [], mcp: mcp.servers || [], approvers: appr.approvers || [], approverMap: appr.map || {} });
 }
 
 let _started = false;
@@ -134,10 +135,12 @@ function denyBucket(d) {
   const s = ((d.reason || "") + " " + (d.intent || "")).toLowerCase();
   if (s.includes("inject") || s.includes("jailbreak")) return "Prompt Injection";
   if (s.includes("drift") || s.includes("scope")) return "Intent Drift";
-  if (s.includes("trust")) return "Low Trust";
-  if (s.includes("surge") || s.includes("hold") || s.includes("quarant") || s.includes("approval") || s.includes("access") || s.includes("denial")) return "Quarantine";
-  if (s.includes("spawn") || s.includes("budget")) return "Spawn Budget";
-  return "Quarantine";
+  if (s.includes("low trust") || s.includes("trust degraded") || s.includes("below threshold") || (s.includes("trust") && (s.includes("≤") || s.includes("<=")))) return "Low Trust";
+  // Only denials that came from an actual isolation policy count as Quarantine.
+  if (s.includes("surge") || s.includes("spawn") || s.includes("budget") || s.includes("denial rate")
+    || s.includes("blast radius") || s.includes("quarant") || s.includes("isolation")
+    || s.includes("on hold") || s.includes("paused") || s.includes("access is on hold")) return "Quarantine";
+  return "Policy Denial";
 }
 function normTool(t) {
   const x = (t || "").toLowerCase();
@@ -152,9 +155,18 @@ function normTool(t) {
 
 // ---- derivations (produce the design's exact shapes) ----
 function deriveAll(s) {
-  const quarantinedUsers = {};
-  (s.quarantine.quarantined || []).forEach((q) => { quarantinedUsers[q.osUser] = q; });
+  const qList = s.quarantine.quarantined || [];
   const cappedSessions = new Set(s.quarantine.capped_sessions || []);
+  // Match a quarantine record against any of a developer's identity forms.
+  const quarantineFor = (u, sess) => {
+    const cands = new Set([u, sess.user_email, sess.oauth_email,
+      (sess.user_email || "").split("@")[0], (sess.oauth_email || "").split("@")[0]]
+      .filter(Boolean).map((x) => String(x).toLowerCase()));
+    return qList.find((q) => {
+      const qu = String(q.osUser || "").toLowerCase();
+      return cands.has(qu) || cands.has(qu.split("@")[0]);
+    }) || null;
+  };
 
   // group sessions by developer (skip placeholder/unresolved principals)
   const byUser = new Map();
@@ -179,7 +191,8 @@ function deriveAll(s) {
     const latest = sessions[sessions.length - 1];
     const trust = (s.trust[u] && s.trust[u].trust != null) ? s.trust[u].trust
       : (s.trust[latest.user_email] && s.trust[latest.user_email].trust != null) ? s.trust[latest.user_email].trust : 70;
-    const isQ = !!quarantinedUsers[u] || !!quarantinedUsers[latest.user_email];
+    const qRec = quarantineFor(u, latest);
+    const isQ = !!qRec;
     const capped = sessions.some((x) => cappedSessions.has(x.session_id));
     const state = isQ ? "Quarantined" : capped ? "Spawn-capped" : "Active";
     const spawnUsed = (decByUser.get(u) || []).filter((d) => normTool(d.tool) === "SpawnAgent" && d.effect === "Permit").length;
@@ -190,7 +203,8 @@ function deriveAll(s) {
       email: latest.oauth_email || latest.user_email || u,
       model: latest.model || "—",
       os: latest.os_type || latest.remote_os || "—",
-      sessions: sessions.length, trust, state, owner: WORKLOAD_OWNER,
+      sessions: sessions.length, trust, state, owner: u,
+      quarantine: qRec ? { policyId: qRec.policyId, policyName: qRec.policyName, resolution: qRec.resolution, message: qRec.message, since: qRec.since } : null,
       svid: latest.spiffe_id || ("agent-hash:" + (latest.session_id || "").slice(0, 8) + " (fallback)"),
       svidFallback: !latest.spiffe_id,
       // developer-detail fields
@@ -233,8 +247,8 @@ function deriveAll(s) {
   const total = permit + deny;
   const permitPct = total ? Math.round((permit / total) * 100) : 100;
   const denyPct = 100 - permitPct;
-  const reasonColors = { "Prompt Injection": "#DC2626", "Intent Drift": "#F59E0B", "Low Trust": "#7C3AED", "Quarantine": "#0EA5E9", "Spawn Budget": "#64748B" };
-  const reasonCounts = { "Prompt Injection": 0, "Intent Drift": 0, "Low Trust": 0, "Quarantine": 0, "Spawn Budget": 0 };
+  const reasonColors = { "Prompt Injection": "#DC2626", "Intent Drift": "#F59E0B", "Low Trust": "#7C3AED", "Quarantine": "#0EA5E9", "Policy Denial": "#64748B" };
+  const reasonCounts = { "Prompt Injection": 0, "Intent Drift": 0, "Low Trust": 0, "Quarantine": 0, "Policy Denial": 0 };
   decs.filter((d) => d.effect !== "Permit").forEach((d) => { reasonCounts[denyBucket(d)]++; });
   const denyTotal = deny || 1;
   const legend = Object.keys(reasonCounts).map((k) => ({ label: k, value: Math.round((reasonCounts[k] / denyTotal) * 100), color: reasonColors[k] }));
@@ -1324,12 +1338,19 @@ function AgentDetail({ row }) {
           <div style={{ background: "var(--red-tint)", border: "1px solid #F5C2C2", borderRadius: 10, padding: "12px 14px" }}>
             <div style={{ display: "flex", gap: 9 }}>
               <Icon name="lock" size={17} color="var(--red)" />
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)" }}>Access Quarantined</div>
-                <div style={{ fontSize: 12.5, color: "#B42318", marginTop: 2 }}>Awaiting reinstatement.</div>
+                <div style={{ fontSize: 12.5, color: "#B42318", marginTop: 2 }}>
+                  {(row.quarantine && row.quarantine.policyName) || "Isolation policy"}
+                  {row.quarantine && row.quarantine.resolution ? ` · ${row.quarantine.resolution}` : ""}
+                </div>
               </div>
             </div>
-            <button className="btn btn-danger btn-sm" style={{ marginTop: 11, width: "100%", background: "#fff", color: "var(--red)", border: "1px solid #F5C2C2" }} onClick={reinstate}>Reinstate</button>
+            {row.quarantine && row.quarantine.resolution === "Auto-Restore"
+              ? <div className="pill pill-amber" style={{ marginTop: 11, width: "100%", justifyContent: "center" }}><span className="status-pulse" style={{ marginRight: 4 }} />Auto-restoring…</div>
+              : <button className="btn btn-danger btn-sm" style={{ marginTop: 11, width: "100%", background: "#fff", color: "var(--red)", border: "1px solid #F5C2C2" }} onClick={reinstate}>
+                  {row.quarantine && row.quarantine.resolution === "HITL" ? "Approve & restore access" : "Grant access (reinstate)"}
+                </button>}
           </div>
         )}
 
@@ -1356,9 +1377,9 @@ function AgentDetail({ row }) {
         {row.svidFallback && <div className="help" style={{ marginTop: -10, color: "var(--amber-ink)" }}>No SVID issued — using agent-hash fallback.</div>}
 
         {(row.accountUuid || row.orgUuid) && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            {row.accountUuid ? <Field label="Account" mono>{String(row.accountUuid).slice(0, 12)}…</Field> : null}
-            {row.orgUuid ? <Field label="Org" mono>{String(row.orgUuid).slice(0, 12)}…</Field> : null}
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {row.accountUuid ? <Field label="Anthropic Account ID" mono>{row.accountUuid}</Field> : null}
+            {row.orgUuid ? <Field label="Anthropic Org ID" mono>{row.orgUuid}</Field> : null}
           </div>
         )}
       </div>
@@ -2090,27 +2111,56 @@ function CodeBlock({ lines, label }) {
 }
 
 function EmailMapTable() {
-  const [rows, setRows] = React.useState([
-    { os: "saisrungaram", email: "sai.s@acme.io" },
-    { os: "d.okonkwo", email: "d.okonkwo@acme.io" },
-  ]);
+  const reva = useReva();
+  const approvers = (reva.raw && reva.raw.approvers) || [];
+  const map = (reva.raw && reva.raw.approverMap) || {};
+  const [rows, setRows] = React.useState(null);
+  const [saved, setSaved] = React.useState(false);
+  // seed editable rows from the live map (once it arrives)
+  React.useEffect(() => {
+    if (rows === null && Object.keys(map).length) setRows(Object.entries(map).map(([os, email]) => ({ os, email })));
+  }, [map]);
+  const list = rows || (Object.keys(map).length ? Object.entries(map).map(([os, email]) => ({ os, email })) : [{ os: "", email: approvers[0] || "" }]);
+  const update = (next) => { setRows(next); setSaved(false); };
+  const save = async () => {
+    const m = {};
+    list.forEach((r) => { if (r.os && r.email) m[r.os.toLowerCase()] = r.email; });
+    try {
+      await fetch("/api/config/approvers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map: m }) });
+      await revaLoadConfigs(); setSaved(true);
+    } catch (e) {}
+  };
   return (
     <div>
       <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
         <table className="tbl">
           <thead><tr><th>osUser</th><th>Approver email</th><th></th></tr></thead>
           <tbody>
-            {rows.map((r, i) => (
+            {list.map((r, i) => (
               <tr key={i}>
-                <td className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>{r.os}</td>
-                <td className="mono" style={{ fontSize: 12.5, color: "var(--ink-2)" }}>{r.email}</td>
-                <td className="right"><button className="kebab" style={{ width: 28, height: 28 }} onClick={() => setRows(rows.filter((_, j) => j !== i))}><Icon name="x" size={14} /></button></td>
+                <td>
+                  <input value={r.os} onChange={(e) => update(list.map((x, j) => j === i ? { ...x, os: e.target.value } : x))}
+                    placeholder="osUser" className="mono" style={{ width: "100%", height: 32, border: "1px solid var(--border-strong)", borderRadius: 7, padding: "0 8px", fontSize: 12.5, outline: "none", background: "#fff" }} />
+                </td>
+                <td>
+                  <select value={r.email} onChange={(e) => update(list.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
+                    className="mono" style={{ width: "100%", height: 32, border: "1px solid var(--border-strong)", borderRadius: 7, padding: "0 8px", fontSize: 12.5, outline: "none", background: "#fff", color: "var(--ink-2)" }}>
+                    <option value="" disabled>Select approver…</option>
+                    {approvers.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </td>
+                <td className="right"><button className="kebab" style={{ width: 28, height: 28 }} onClick={() => update(list.filter((_, j) => j !== i))}><Icon name="x" size={14} /></button></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <button className="btn btn-text btn-sm" style={{ marginTop: 8, paddingLeft: 4 }} onClick={() => setRows([...rows, { os: "newuser", email: "user@acme.io" }])}><Icon name="plus" size={14} /> Add row</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
+        <button className="btn btn-text btn-sm" style={{ paddingLeft: 4 }} onClick={() => update([...list, { os: "", email: approvers[0] || "" }])}><Icon name="plus" size={14} /> Add row</button>
+        <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }} onClick={save}>Save mapping</button>
+        {saved && <span className="pill pill-green"><Icon name="check" size={13} /> Saved</span>}
+      </div>
+      <div className="help" style={{ marginTop: 6 }}>The selected approver is used for both Slack approvals and quarantine reinstatement requests.</div>
     </div>
   );
 }
