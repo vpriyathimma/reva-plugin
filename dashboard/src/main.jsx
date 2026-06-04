@@ -204,7 +204,7 @@ function deriveAll(s) {
       model: latest.model || "—",
       os: latest.os_type || latest.remote_os || "—",
       sessions: sessions.length, trust, state, owner: u,
-      quarantine: qRec ? { policyId: qRec.policyId, policyName: qRec.policyName, resolution: qRec.resolution, message: qRec.message, since: qRec.since } : null,
+      quarantine: qRec ? { osUser: qRec.osUser, policyId: qRec.policyId, policyName: qRec.policyName, resolution: qRec.resolution, message: qRec.message, status: qRec.status, since: qRec.since } : null,
       svid: latest.spiffe_id || ("agent-hash:" + (latest.session_id || "").slice(0, 8) + " (fallback)"),
       svidFallback: !latest.spiffe_id,
       // developer-detail fields
@@ -1317,7 +1317,7 @@ function Field({ label, children, mono }) {
 function AgentDetail({ row }) {
   const quarantined = row.state === "Quarantined";
   const [appr, setAppr] = React.useState("idle"); // idle | sending | sent | noslack | error
-  const osUserOfRow = () => (row.id.match(/"([^"]+)"/) || [])[1] || "";
+  const osUserOfRow = () => (row.quarantine && row.quarantine.osUser) || (row.id.match(/"([^"]+)"/) || [])[1] || "";
   React.useEffect(() => { setAppr("idle"); }, [row.id]);
   const sendApproval = () => {
     const osUser = osUserOfRow();
