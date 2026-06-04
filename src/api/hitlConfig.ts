@@ -311,6 +311,40 @@ export async function handleSlackInteraction(payload: any): Promise<{ ok: boolea
   const actionId   = action.action_id;
   const user       = payload.user?.name || payload.user?.real_name || 'unknown';
 
+  // Quarantine reinstatement approval buttons (Send Approval flow).
+  // value looks like "approve:user:saisrungaram" / "deny:user:saisrungaram".
+  if (actionId === 'reva_approve' || actionId === 'reva_deny') {
+    const decision  = actionId === 'reva_approve' ? 'approve' : 'deny';
+    const raw       = String(action.value || '');
+    const principal = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;       // user:saisrungaram
+    const osUser    = principal.startsWith('user:') ? principal.slice(5) : principal;  // saisrungaram
+
+    if (decision === 'approve') {
+      try { require('./quarantine').reinstate(osUser); } catch (e) {}
+    }
+    const decidedText = decision === 'approve'
+      ? `:white_check_mark: *Approved* by ${user} — access restored for \`${osUser}\`.`
+      : `:x: *Denied* by ${user} — \`${osUser}\` remains on hold.`;
+    console.log(`[QUARANTINE:Slack] ${decision.toUpperCase()} by ${user} for ${osUser}`);
+
+    // Replace the original message (buttons removed) so the decision is recorded in-channel.
+    if (payload.response_url) {
+      try {
+        await fetch(payload.response_url, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            replace_original: true,
+            text: decidedText,
+            blocks: [{ type: 'section', text: { type: 'mrkdwn',
+              text: `:rotating_light: *Access reinstatement — ${decision === 'approve' ? 'resolved' : 'denied'}*\n*Principal:* user:${osUser}\n${decidedText}` } }],
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch (e) {}
+    }
+    return { ok: true };
+  }
+
   const record = approvalStore.get(approvalId);
   if (!record) return { ok: false };
 
