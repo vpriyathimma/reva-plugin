@@ -22,7 +22,7 @@ const RevaStore = {
   state: {
     loading: true,
     sessions: [], decisions: [], quarantine: { quarantined: [], policies: [], capped_sessions: [], spawn_limit: 5 },
-    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [], approvers: [], approverSelected: "",
+    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [], approvers: [], approverSelected: "", policySets: [],
   },
   subs: new Set(),
   set(patch) { this.state = { ...this.state, ...patch }; this.subs.forEach((f) => f()); },
@@ -58,15 +58,16 @@ async function revaRefetch() {
 }
 
 async function revaLoadConfigs() {
-  const [sec, hitl, cmd, fz, mcp, appr] = await Promise.all([
+  const [sec, hitl, cmd, fz, mcp, appr, psets] = await Promise.all([
     jget("/api/config/security").catch(() => null),
     jget("/api/config/hitl").catch(() => null),
     jget("/api/config/commands").catch(() => ({ rules: [] })),
     jget("/api/config/filezones").catch(() => ({ rules: [] })),
     jget("/api/mcp-discovery").catch(() => ({ servers: [] })),
     jget("/api/config/approvers").catch(() => ({ approvers: [], selected: "" })),
+    jget("/api/config/policy-sets").catch(() => ({ sets: [] })),
   ]);
-  RevaStore.set({ security: sec, hitl, commands: cmd || { safe: [], restricted: [], destructive: [] }, filezones: (fz && fz.zones) || [], mcp: mcp.servers || [], approvers: appr.approvers || [], approverSelected: appr.selected || "" });
+  RevaStore.set({ security: sec, hitl, commands: cmd || { safe: [], restricted: [], destructive: [] }, filezones: (fz && fz.zones) || [], mcp: mcp.servers || [], approvers: appr.approvers || [], approverSelected: appr.selected || "", policySets: (psets && psets.sets) || [] });
 }
 
 let _started = false;
@@ -324,7 +325,7 @@ function deriveAll(s) {
   } catch (e) { aaiPolicies = []; }
 
   return { raw: s, loading: s.loading, roster, kpis, denyDonut: { permitPct, denyPct, legend }, highDeny, usage, logs,
-    aaiPolicies, terminated: s.terminated || [],
+    aaiPolicies, terminated: s.terminated || [], policySets: s.policySets || [],
     quarantine: s.quarantine, security: s.security, hitl: s.hitl, commands: s.commands, filezones: s.filezones, mcp: s.mcp };
 }
 
@@ -1877,6 +1878,7 @@ async function saveSecurity(patch) {
   } catch (e) { /* keep UI responsive */ }
 }
 
+
 function Detector({ d, on, onToggle }) {
   return (
     <Row label={
@@ -1931,6 +1933,7 @@ function SettingsTab() {
           return <Detector key={d.name} d={d} on={on} onToggle={() => saveSecurity({ [d.key]: !on })} />;
         })}
       </SettingsCard>
+
 
       {/* Identity */}
       <SettingsCard title="Identity" subtitle="Agent identity attestation and approver mapping.">
@@ -3656,6 +3659,56 @@ const TABS = [
   "Decision Logs", "Developer Integration", "Settings",
 ];
 
+/* Policies tab — policy sets with risk level + enable toggle */
+const RISK_TONE = { Critical: "red", High: "amber", Medium: "blue", Low: "gray" };
+
+async function savePolicySet(id, enabled) {
+  try {
+    const r = await fetch("/api/config/policy-sets", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, enabled }),
+    });
+    const data = await r.json();
+    RevaStore.set({ policySets: data.sets || [] });
+  } catch (e) { /* keep UI responsive */ }
+}
+
+function PoliciesTab() {
+  const reva = useReva();
+  const sets = reva.policySets || [];
+  return (
+    <div style={{ padding: 28, maxWidth: 1100 }}>
+      <div className="card" style={{ overflow: "hidden" }}>
+        <CardHead
+          title="Policy Sets"
+          right={<button className="btn btn-primary btn-sm" onClick={() => {}}>+ Create</button>}
+        />
+        <table className="tbl">
+          <thead>
+            <tr><th>Name</th><th>Description</th><th>Risk Level</th><th className="right">Enabled</th></tr>
+          </thead>
+          <tbody>
+            {sets.map((s) => (
+              <tr key={s.id}>
+                <td style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap" }}>{s.name}</td>
+                <td style={{ maxWidth: 520 }}><span className="help">{s.description}</span></td>
+                <td><Pill tone={RISK_TONE[s.risk] || "gray"}>{s.risk}</Pill></td>
+                <td className="right">
+                  <Toggle on={s.enabled !== false} onClick={() => savePolicySet(s.id, !(s.enabled !== false))} />
+                </td>
+              </tr>
+            ))}
+            {sets.length === 0 && (
+              <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--ink-4)", padding: 32 }}>No policy sets.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+window.PoliciesTab = PoliciesTab;
+
 const RAIL = [
   { id: "home", name: "Home", icon: "home" },
   { id: "workloads", name: "AI Workloads", icon: "layers" },
@@ -3801,6 +3854,7 @@ function App() {
 
   const map = {
     "Insights": window.Insights,
+    "Policies": window.PoliciesTab,
     "Decision Logs": window.DecisionLogs,
     "Developer Integration": window.DeveloperIntegration,
     "Settings": window.SettingsTab,
