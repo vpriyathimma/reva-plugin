@@ -3677,7 +3677,7 @@ function PoliciesTab() {
   const reva = useReva();
   const sets = reva.policySets || [];
   return (
-    <div style={{ padding: 28, maxWidth: 1100 }}>
+    <div style={{ padding: 28 }}>
       <div className="card" style={{ overflow: "hidden" }}>
         <CardHead
           title="Policy Sets"
@@ -3691,7 +3691,7 @@ function PoliciesTab() {
             {sets.map((s) => (
               <tr key={s.id}>
                 <td style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap" }}>{s.name}</td>
-                <td style={{ maxWidth: 520 }}><span className="help">{s.description}</span></td>
+                <td><span className="help">{s.description}</span></td>
                 <td><Pill tone={RISK_TONE[s.risk] || "gray"}>{s.risk}</Pill></td>
                 <td className="right">
                   <Toggle on={s.enabled !== false} onClick={() => savePolicySet(s.id, !(s.enabled !== false))} />
