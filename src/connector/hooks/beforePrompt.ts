@@ -8,6 +8,8 @@ import { logDecision }                from '../discovery/enroll';
 import { getOrCreateSessionTrace, evaluateCedar, buildClaudeCodeInjectionPayload } from '../../api/pdpEvaluate';
 
 import { subagentContextStore } from './beforeToolCall';
+import { isQuarantined } from '../../api/quarantine';
+import { isEnabled } from '../../api/securityConfig';
 
 export const sessionIntentStore = new Map<string, {
   intent:         string;
@@ -40,6 +42,27 @@ export async function handlePromptSubmit(req: Request, res: Response) {
     if (isBypassAttempt) {
       console.warn(`[BYPASS] Developer used ! command bypass: session=${session_id} user=${user_email} prompt="${prompt.slice(0, 100)}"`);
       recordBypassAttempt(session_id);
+    }
+
+    // ── Prompt-tier quarantine — only when quarantine_access is enabled (master
+    // switch). Blocks ALL prompts (even in a fresh session) until the window
+    // lifts (surge) or an admin restores access (revoke). Neutral message.
+    const qRec = isEnabled('quarantine_access') ? isQuarantined(user_email) : null;
+    if (qRec && qRec.tier === 'prompt') {
+      console.log(`[QUARANTINE] prompt blocked: ${user_email} via ${qRec.policyId}`);
+      logDecision({
+        timestamp: new Date().toISOString(), session_id, user_email,
+        tool: 'prompt', server: 'claude-code', sensitivity: 'high',
+        effect: 'Deny', reason: qRec.policyName, intent: 'access_hold', agent_type: 'main',
+      });
+      return res.json({
+        hookSpecificOutput: {
+          hookEventName: 'UserPromptSubmit',
+          permissionDecision: 'deny',
+          permissionDecisionReason: qRec.message,
+        },
+        reva: { effect: 'Deny', reason: qRec.policyName },
+      });
     }
 
     // Classify intent + compute guardrail scores

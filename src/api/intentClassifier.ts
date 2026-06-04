@@ -228,6 +228,12 @@ export function classifyPrompt(
 
   const trust_score = computeTrustScore(confidence, guardrails, true);
   const sensitivity = deriveSensitivity('medium', trust_score);
+  // Prompt Injection toggle: when OFF, strip injection signals so no injection
+  // context attribute flows downstream (Claude Code blocks injection itself).
+  if (!require('./securityConfig').isEnabled('prompt_injection')) {
+    guardrails.injection_score = 0;
+    guardrails.jailbreak_score = 0;
+  }
   return { intent, confidence, trust_score, sensitivity, scores: guardrails };
 }
 

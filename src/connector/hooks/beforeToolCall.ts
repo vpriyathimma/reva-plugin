@@ -8,6 +8,9 @@ import { claudeSessionUserStore, spiffeIdStore, hostnameStore, sessionModelStore
 import { getPIPContext } from '../../api/pip';
 import { getHITLConfig as getHITLConfigFn, findApprovalForDeveloper as findApprovalForDeveloperFn, findPendingApproval as findPendingApprovalFn, triggerHITL as triggerHITLFn } from '../../api/hitlConfig';
 import { isSessionTerminated } from '../../api/sessionControl';
+import { isQuarantined, clip as quarantineClip, noteSpawn, SPAWN_LIMIT, DENY_RATE_THRESHOLD, DENY_RATE_MIN_DECISIONS, POLICY_DEFS } from '../../api/quarantine';
+import { isEnabled } from '../../api/securityConfig';
+import { decisionLog } from '../discovery/enroll';
 import { isPrivilegedCommand, validateSVID } from '../../api/svid';
 import { recordDynamicTool, discoveredServers } from '../../api/mcpProbe';
 import { triggerHITL }           from '../hitl/trigger';
@@ -282,6 +285,52 @@ export async function handleToolCall(req: Request, res: Response) {
       });
     }
 
+    // ── Access quarantine — only when quarantine_access is enabled. This is the
+    // master switch: OFF means none of the 4 isolation policies enforce and no
+    // access is quarantined. When ON, any active quarantine blocks tool calls,
+    // and a High Denial Rate over the current session clips the developer.
+    if (isEnabled('quarantine_access')) {
+      const qRec = isQuarantined(user_email);
+      if (qRec) {
+        console.log(`[QUARANTINE] tool blocked: ${user_email} via ${qRec.policyId}`);
+        logDecision({
+          timestamp: new Date().toISOString(), session_id, user_email,
+          tool: tool_name, server: server_name || 'claude-code', sensitivity: 'high',
+          effect: 'Deny', reason: qRec.policyName, agent_type: 'main',
+        });
+        return res.json({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: qRec.message,
+          },
+          reva: { effect: 'Deny', reason: qRec.policyName },
+        });
+      }
+      // High Denial Rate (AAI-RBP-002) — deny rate over this session's decisions.
+      const sessDecs = decisionLog.filter(d => d.session_id === session_id);
+      const totalDec = sessDecs.length;
+      const denies   = sessDecs.filter(d => d.effect === 'Deny').length;
+      if (totalDec >= DENY_RATE_MIN_DECISIONS && (denies / totalDec) > DENY_RATE_THRESHOLD) {
+        const pct = Math.round((denies / totalDec) * 100);
+        quarantineClip({ osUser: user_email, policyId: 'AAI-RBP-002', reason: `${denies}/${totalDec} denials this session (${pct}%)` });
+        console.log(`[QUARANTINE] deny-rate: ${user_email} ${denies}/${totalDec} (${pct}%) session=${session_id}`);
+        logDecision({
+          timestamp: new Date().toISOString(), session_id, user_email,
+          tool: tool_name, server: server_name || 'claude-code', sensitivity: 'high',
+          effect: 'Deny', reason: 'High Denial Rate', agent_type: 'main',
+        });
+        return res.json({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: POLICY_DEFS['AAI-RBP-002'].message,
+          },
+          reva: { effect: 'Deny', reason: 'High Denial Rate' },
+        });
+      }
+    }
+
     // Derive project name dynamically — NEVER hardcode
     const filePath = req.body?.tool_input?.file_path || req.body?.tool_input?.path || '';
     const derivedProject = projectFromHeader
@@ -318,6 +367,50 @@ export async function handleToolCall(req: Request, res: Response) {
     // When SpawnAgent fires → mark subagent context active
     const isSpawnAgent = tool_name === 'Agent' || tool_name === 'Task' || tool_name === 'TaskCreate' || tool_name === 'TaskUpdate';
     if (isSpawnAgent) {
+      // Spawn budget: max 5 parallel agents per session. The 6th attempt is
+      // denied (Claude Code never invokes agent 6); the session stays capped for
+      // its whole life, and the developer is quarantined for 5 minutes so no
+      // prompt works in any session during the window. Gated by quarantine_access.
+      if (isEnabled('quarantine_access')) {
+        const spawn = noteSpawn(session_id);
+        if (spawn.overLimit) {
+          quarantineClip({
+            osUser:   user_email,
+            policyId: 'AAI-RBP-003',
+            reason:   `Started more than ${SPAWN_LIMIT} parallel agents in session ${session_id}`,
+          });
+          console.log(`[QUARANTINE] surge: ${user_email} exceeded ${SPAWN_LIMIT} spawns session=${session_id}`);
+          logDecision({
+            timestamp: new Date().toISOString(), session_id, user_email,
+            tool: 'SpawnAgent', server: 'claude-code', sensitivity: 'high',
+            effect: 'Deny', reason: `Spawn budget ${SPAWN_LIMIT}/${SPAWN_LIMIT}`, agent_type: 'main',
+          });
+          return res.json({
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: `Spawn limit reached (${SPAWN_LIMIT}/${SPAWN_LIMIT}). Parallel agents are paused for 5 minutes — start a new session after 5 minutes to continue.`,
+            },
+            reva: { effect: 'Deny', reason: 'Ephemeral Agent Surge' },
+          });
+        }
+        if (spawn.capped) {
+          // window already elapsed but this session remains capped
+          logDecision({
+            timestamp: new Date().toISOString(), session_id, user_email,
+            tool: 'SpawnAgent', server: 'claude-code', sensitivity: 'high',
+            effect: 'Deny', reason: `Spawn budget ${SPAWN_LIMIT}/${SPAWN_LIMIT}`, agent_type: 'main',
+          });
+          return res.json({
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: `Spawn limit reached for this session (${SPAWN_LIMIT}/${SPAWN_LIMIT}). Start a new session to run more parallel agents.`,
+            },
+            reva: { effect: 'Deny', reason: 'Ephemeral Agent Surge' },
+          });
+        }
+      }
       // Name + declared scope come from Claude Code's spawn metadata — NOT hardcoded.
       // subagent_type is the named agent (code-reviewer, auditor, ...); fall back
       // defensively across key variants, then to a generic label if absent.
@@ -423,14 +516,20 @@ export async function handleToolCall(req: Request, res: Response) {
       || req.body?.tool_input?.url
       || '';
     const intentTier   = promptIntent;   // informational label (read/write/...), kept for the existing context field
-    const drift = checkIntentDrift({
-      target:         String(actionTarget),
-      tool_name,
-      declared_scope: declaredScope,
-      initial_scope:  initialScope,
-    });
+    // Intent Drift toggle: when OFF, skip drift entirely — no drift compute, no
+    // intent context attributes flow into Cedar, and no intent-drift entry is
+    // logged. When ON, behaviour is unchanged.
+    const intentDriftEnabled = isEnabled('intent_drift');
+    const drift = intentDriftEnabled
+      ? checkIntentDrift({
+          target:         String(actionTarget),
+          tool_name,
+          declared_scope: declaredScope,
+          initial_scope:  initialScope,
+        })
+      : { is_intent_drift: false, intent_drift_score: 0, reduces_trust: false };
     const { is_intent_drift, intent_drift_score } = drift;
-    if (is_intent_drift) {
+    if (intentDriftEnabled && is_intent_drift) {
       const kind = drift.reduces_trust ? 'operation' : 'scope';
       // Scope drift (out-of-scope target, still a read) → Cedar denies on
       // is_intent_drift, but NO trust penalty (containment, not a trust signal).

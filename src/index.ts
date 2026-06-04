@@ -154,6 +154,11 @@ app.post('/api/pdp/hook', async (req, res) => {
   // UserPromptSubmit. This fires whether or not Claude acts on the payload, so an
   // injection Claude refuses still lands in the decisions feed.
   if (event === 'PostToolBatch') {
+    if (!require('./api/securityConfig').isEnabled('prompt_injection')) {
+      // Prompt Injection toggle OFF — do not scan ingested content or attribute
+      // any injection. Claude Code still blocks injections on its own.
+      return res.json({});
+    }
     const calls = Array.isArray(req.body?.tool_calls) ? req.body.tool_calls : [];
     // Resolve WHO read the files in this batch — Claude Code stamps the subagent's
     // agent_id/agent_type on the batch body (absent for the main agent). Drives the
@@ -301,6 +306,14 @@ app.post('/api/pdp/hook', async (req, res) => {
 // Session control routes
 import { sessionControlRouter } from './api/sessionControl';
 app.use('/api', sessionControlRouter);
+
+// Security feature flags (Settings toggles), quarantine (AAI), live stream + trust
+import { securityConfigRouter } from './api/securityConfig';
+import { quarantineRouter }     from './api/quarantine';
+import { streamRouter }         from './api/stream';
+app.use('/api', securityConfigRouter);
+app.use('/api', quarantineRouter);
+app.use('/api', streamRouter);
 
 // Classification config routes
 import { getCommandRules, setCommandRules, getFileZoneRules, setFileZoneRules } from './api/pdpEvaluate';

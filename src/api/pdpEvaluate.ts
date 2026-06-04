@@ -288,6 +288,7 @@ export function getFileZoneRules(): FileZoneRule[] { return fileZoneRules; }
 export function setFileZoneRules(rules: FileZoneRule[]): void { fileZoneRules = rules; }
 
 export function resolveFileZone(filePath: string): string {
+  if (!require('./securityConfig').isEnabled('file_sensitivity')) return 'other';
   const p = filePath.replace(/\\/g, '/');
   for (const rule of fileZoneRules) {
     try {
@@ -310,6 +311,7 @@ export function getCommandRules(): CommandRule[] { return commandRules; }
 export function setCommandRules(rules: CommandRule[]): void { commandRules = rules; }
 
 export function classifyCommand(cmd: string): 'safe' | 'restricted' | 'destructive' {
+  if (!require('./securityConfig').isEnabled('commands_classification')) return 'safe';
   const c = cmd.toLowerCase().trim();
   for (const rule of commandRules) {
     try {

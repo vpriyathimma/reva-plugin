@@ -1,0 +1,196 @@
+/* ============================================================
+   Reva Governance Console — Design Tokens & Base
+   Light, enterprise-grade. No dark surfaces.
+   ============================================================ */
+:root {
+  /* Surfaces */
+  --bg: #F4F6F9;
+  --surface: #FFFFFF;
+  --surface-2: #F8FAFC;   /* light tinted "code" surface */
+  --surface-3: #F1F4F9;
+  --border: #E6EAF0;
+  --border-strong: #D7DDE7;
+
+  /* Text */
+  --ink: #0B1220;
+  --ink-2: #344054;
+  --ink-3: #667085;
+  --ink-4: #98A2B3;
+
+  /* Brand */
+  --blue: #2563EB;
+  --blue-700: #1D4FD7;
+  --blue-tint: #EFF4FF;
+  --purple: #7C3AED;
+  --purple-tint: #F4EEFF;
+
+  /* Status */
+  --green: #16A34A;
+  --green-tint: #E8F6EE;
+  --red: #DC2626;
+  --red-tint: #FDECEC;
+  --amber: #F59E0B;
+  --amber-tint: #FEF4E2;
+  --amber-ink: #B45309;
+  --coral: #ea580c;
+  --coral-tint: #ffedd5;
+  --coral-ink: #9a3412;
+  --teal: #0d9488;
+  --teal-tint: #ccfbf1;
+  --teal-ink: #115e59;
+  --info: #2563EB;
+  --info-tint: #EFF4FF;
+
+  /* Geometry */
+  --r-lg: 16px;
+  --r-md: 12px;
+  --r-sm: 8px;
+  --r-pill: 999px;
+  --shadow-card: 0 1px 4px rgba(16,24,40,0.04);
+  --shadow-pop: 0 8px 28px rgba(16,24,40,0.12), 0 2px 6px rgba(16,24,40,0.06);
+  --shadow-drawer: -16px 0 40px rgba(16,24,40,0.10);
+
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "Inter", -apple-system, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+button { font-family: inherit; cursor: pointer; }
+input { font-family: inherit; }
+::selection { background: #D7E3FF; }
+
+/* Scrollbars — quiet */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: #D7DDE7; border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: #C2CAD6; background-clip: content-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Shared atoms ---------- */
+.mono { font-family: var(--mono); font-variant-ligatures: none; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+
+/* Pill badges */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 10px;
+  border-radius: var(--r-pill);
+  font-size: 12px; font-weight: 600; line-height: 1;
+  white-space: nowrap;
+}
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill-blue   { background: var(--blue-tint);   color: var(--blue-700); }
+.pill-purple { background: var(--purple-tint);  color: var(--purple); }
+.pill-green  { background: var(--green-tint);   color: var(--green); }
+.pill-red    { background: var(--red-tint);     color: var(--red); }
+.pill-amber  { background: var(--amber-tint);   color: var(--amber-ink); }
+.pill-gray   { background: var(--surface-3);    color: var(--ink-3); }
+.pill-coral  { background: var(--coral-tint);    color: var(--coral-ink); }
+.pill-teal   { background: var(--teal-tint);     color: var(--teal-ink); }
+
+/* Trend chip */
+.trend { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.trend-up   { color: var(--red); }   /* up = bad (more denials etc) per spec */
+.trend-down { color: var(--green); }
+.trend-flat { color: var(--ink-3); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 38px; padding: 0 16px;
+  border-radius: var(--r-sm);
+  font-size: 13.5px; font-weight: 600;
+  border: 1px solid transparent; white-space: nowrap;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.btn-primary { background: var(--blue); color: #fff; box-shadow: 0 1px 2px rgba(37,99,235,.25); }
+.btn-primary:hover { background: var(--blue-700); }
+.btn-ghost { background: var(--surface); color: var(--ink-2); border-color: var(--border-strong); }
+.btn-ghost:hover { background: var(--surface-2); }
+.btn-text { background: transparent; color: var(--ink-3); }
+.btn-text:hover { color: var(--ink-2); background: var(--surface-2); }
+.btn-sm { height: 32px; padding: 0 12px; font-size: 12.5px; }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-danger:hover { filter: brightness(.95); }
+
+/* Search input */
+.search {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 14px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill); color: var(--ink-3);
+  min-width: 260px; transition: border-color .15s, box-shadow .15s;
+}
+.search:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-tint); }
+.search input { border: 0; outline: 0; background: transparent; font-size: 13.5px; color: var(--ink); width: 100%; }
+.search input::placeholder { color: var(--ink-4); }
+
+/* Toggle */
+.toggle { width: 38px; height: 22px; border-radius: 999px; background: #D0D5DD; position: relative; border: 0; padding: 0; transition: background .18s; flex: none; }
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(16,24,40,.2); transition: transform .18s; }
+.toggle.on { background: var(--green); }
+.toggle.on::after { transform: translateX(16px); }
+
+/* Segmented control */
+.seg { display: inline-flex; background: var(--surface-3); border-radius: var(--r-sm); padding: 3px; gap: 2px; }
+.seg button { height: 30px; padding: 0 14px; border: 0; background: transparent; border-radius: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-3); transition: all .15s; }
+.seg button.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-card); }
+
+/* Dropdown-ish select chip */
+.selchip { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 12px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-sm); font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.selchip:hover { background: var(--surface-2); }
+
+/* Overflow (3-dot) */
+.kebab { width: 32px; height: 32px; border-radius: var(--r-sm); border: 0; background: transparent; color: var(--ink-4); display: inline-flex; align-items: center; justify-content: center; }
+.kebab:hover { background: var(--surface-3); color: var(--ink-2); }
+
+/* Tables */
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl thead th { text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-4); padding: 10px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tbl tbody td { padding: 13px 16px; border-bottom: 1px solid var(--border); font-size: 13.5px; color: var(--ink-2); vertical-align: middle; }
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.tbl tbody tr.clickable { cursor: pointer; transition: background .12s; }
+.tbl tbody tr.clickable:hover { background: var(--surface-2); }
+.tbl tbody tr.selected { background: var(--blue-tint); }
+.tbl .right { text-align: right; }
+
+/* code / terminal — LIGHT surface (no dark per request) */
+.code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.7;
+  color: #334155;
+  position: relative;
+}
+.code .tok-key { color: #2563EB; }
+.code .tok-str { color: #15803D; }
+.code .tok-num { color: #7C3AED; }
+.code .tok-cmt { color: #94A3B8; }
+.code .tok-fn  { color: #B45309; }
+
+.meter { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.meter > span { display: block; height: 100%; border-radius: 999px; }
+
+/* helper text */
+.help { font-size: 12.5px; color: var(--ink-3); }
+.muted { color: var(--ink-3); }
+.sub { color: var(--ink-3); font-size: 13px; }
+
+.section-title { font-size: 16px; font-weight: 600; color: var(--ink); }
+.eyebrow { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-4); }

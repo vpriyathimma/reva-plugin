@@ -120,4 +120,7 @@ export function getSession(session_id: string): EnrolledSession | undefined {
 export function logDecision(entry: DecisionLog) {
   decisionLog.push(entry);
   console.log(`[PDP] ${entry.effect} | ${entry.user_email} | ${entry.tool} | ${entry.reason}`);
+  // Live push to the console (SSE). Lazy require avoids any import cycle and can
+  // never throw into the decision path.
+  try { require('../../api/events').emitReva({ type: 'decision' }); } catch { /* */ }
 }
