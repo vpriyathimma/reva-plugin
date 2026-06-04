@@ -37,12 +37,12 @@ export const POLICY_DEFS: Record<string, PolicyDef> = {
   'AAI-RBP-002': {
     id: 'AAI-RBP-002', name: 'High Denial Rate', trigger: 'Runtime',
     resolution: 'HITL', tier: 'toolcall',
-    message: 'Your recent actions need approval before continuing. A review request has been sent — you can resume once it is approved.',
+    message: 'Your access is on hold. Please reach out to your administrator to restore access.',
   },
   'AAI-UAP-001': {
     id: 'AAI-UAP-001', name: 'Prompt Injection Detection', trigger: 'Runtime',
     resolution: 'HITL', tier: 'toolcall',
-    message: 'This action needs approval before continuing. A review request has been sent.',
+    message: 'Your access is on hold. Please reach out to your administrator to restore access.',
   },
   'AAI-RBP-003': {
     id: 'AAI-RBP-003', name: 'Ephemeral Agent Surge', trigger: 'Runtime',
@@ -56,7 +56,7 @@ export const POLICY_DEFS: Record<string, PolicyDef> = {
   },
 };
 
-export type QuarantineStatus = 'Quarantined' | 'Awaiting resolution' | 'Auto-restoring';
+export type QuarantineStatus = 'Quarantined' | 'Awaiting resolution' | 'Auto-restoring' | 'Approval sent';
 
 export interface QuarantineRecord {
   osUser:     string;
@@ -137,8 +137,7 @@ export function clip(params: {
     since:      new Date(now).toISOString(),
     ttlSec:     def.ttlSec,
     expiresAt:  def.ttlSec ? now + def.ttlSec * 1000 : undefined,
-    status:     params.status || (def.resolution === 'HITL' ? 'Awaiting resolution'
-                : def.resolution === 'Auto-Restore' ? 'Auto-restoring' : 'Quarantined'),
+    status:     params.status || (def.resolution === 'Auto-Restore' ? 'Auto-restoring' : 'Quarantined'),
   };
   quarantineStore.set(params.osUser, rec);
   console.log(`[QUARANTINE] clip ${params.osUser} via ${def.id} (${def.name}) tier=${def.tier} resolution=${def.resolution}`);
@@ -204,4 +203,35 @@ quarantineRouter.post('/quarantine/reinstate', (req: Request, res: Response) => 
   if (!osUser) return res.status(400).json({ ok: false, error: 'osUser required' });
   const ok = reinstate(osUser);
   res.json({ ok, reinstated: ok ? osUser : null });
+});
+
+// Send an approval request for a quarantined principal. Approvals land in the
+// configured Slack channel; if Slack isn't configured we report that so the UI
+// can prompt the admin to configure it (we do NOT silently fake an approval).
+quarantineRouter.post('/quarantine/request-approval', async (req: Request, res: Response) => {
+  const { osUser } = req.body || {};
+  if (!osUser) return res.status(400).json({ ok: false, error: 'osUser required' });
+  const rec = quarantineStore.get(osUser);
+  if (!rec) return res.status(404).json({ ok: false, error: 'not quarantined' });
+
+  const hitl = require('./hitlConfig').getHITLConfig();
+  const slackReady = hitl && hitl.integration === 'slack' && hitl.slack_connected
+    && hitl.slack_bot_token && (hitl.slack_channel_id || hitl.slack_channel);
+  if (!slackReady) {
+    return res.json({ ok: false, reason: 'slack_not_configured' });
+  }
+
+  let approver = '';
+  try { approver = require('./approverConfig').getApproverFor(osUser); } catch {}
+  const send = require('./hitlConfig').sendQuarantineApprovalMessage;
+  const result = await send(hitl.slack_bot_token, hitl.slack_channel_id || hitl.slack_channel, {
+    principal: `user:${osUser}`, policyName: rec.policyName, approver, detail: rec.reason,
+  });
+  if (!result.ok) {
+    console.warn(`[QUARANTINE] approval send failed for ${osUser}: ${result.error}`);
+    return res.json({ ok: false, reason: 'slack_send_failed', error: result.error });
+  }
+  rec.status = 'Approval sent';
+  console.log(`[QUARANTINE] approval requested for ${osUser} → Slack (approver=${approver || 'n/a'})`);
+  res.json({ ok: true, sent: true, channel: hitl.slack_channel || hitl.slack_channel_id, approver });
 });

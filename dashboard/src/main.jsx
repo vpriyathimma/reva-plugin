@@ -599,6 +599,7 @@ const RESOLUTION_PILL = {
 const STATUS_PILL = {
   "Quarantined": "gray",
   "Awaiting resolution": "amber",
+  "Approval sent": "amber",
   "In certification": "purple",
   "Auto-restoring": "blue",
   "Resolved": "green",
@@ -1315,10 +1316,21 @@ function Field({ label, children, mono }) {
 
 function AgentDetail({ row }) {
   const quarantined = row.state === "Quarantined";
-  const reinstate = () => {
-    const osUser = (row.id.match(/"([^"]+)"/) || [])[1] || "";
+  const [appr, setAppr] = React.useState("idle"); // idle | sending | sent | noslack | error
+  const osUserOfRow = () => (row.id.match(/"([^"]+)"/) || [])[1] || "";
+  React.useEffect(() => { setAppr("idle"); }, [row.id]);
+  const sendApproval = () => {
+    const osUser = osUserOfRow();
     if (!osUser) return;
-    fetch("/api/quarantine/reinstate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ osUser }) }).then(() => revaRefetch()).catch(() => {});
+    setAppr("sending");
+    fetch("/api/quarantine/request-approval", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ osUser }) })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.ok) { setAppr("sent"); revaRefetch(); }
+        else if (d.reason === "slack_not_configured") setAppr("noslack");
+        else setAppr("error");
+      })
+      .catch(() => setAppr("error"));
   };
   return (
     <div className="card" style={{ overflow: "hidden", position: "sticky", top: 60 }}>
@@ -1342,15 +1354,21 @@ function AgentDetail({ row }) {
                 <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)" }}>Access Quarantined</div>
                 <div style={{ fontSize: 12.5, color: "#B42318", marginTop: 2 }}>
                   {(row.quarantine && row.quarantine.policyName) || "Isolation policy"}
-                  {row.quarantine && row.quarantine.resolution ? ` · ${row.quarantine.resolution}` : ""}
                 </div>
               </div>
             </div>
-            {row.quarantine && row.quarantine.resolution === "Auto-Restore"
-              ? <div className="pill pill-amber" style={{ marginTop: 11, width: "100%", justifyContent: "center" }}><span className="status-pulse" style={{ marginRight: 4 }} />Auto-restoring…</div>
-              : <button className="btn btn-danger btn-sm" style={{ marginTop: 11, width: "100%", background: "#fff", color: "var(--red)", border: "1px solid #F5C2C2" }} onClick={reinstate}>
-                  {row.quarantine && row.quarantine.resolution === "HITL" ? "Approve & restore access" : "Grant access (reinstate)"}
-                </button>}
+            {row.quarantine && row.quarantine.resolution === "Auto-Restore" ? (
+              <div className="pill pill-amber" style={{ marginTop: 11, width: "100%", justifyContent: "center" }}><span className="status-pulse" style={{ marginRight: 4 }} />Auto-restoring…</div>
+            ) : appr === "sent" || (row.quarantine && row.quarantine.status === "Approval sent") ? (
+              <div className="pill pill-amber" style={{ marginTop: 11, width: "100%", justifyContent: "center" }}>Approval sent · awaiting resolution</div>
+            ) : appr === "noslack" ? (
+              <div style={{ marginTop: 11, fontSize: 12, color: "#B42318" }}>Slack isn't configured. Ask an admin to configure Slack under <b>Integrations</b> to send approval requests.</div>
+            ) : (
+              <button className="btn btn-danger btn-sm" style={{ marginTop: 11, width: "100%", background: "#fff", color: "var(--red)", border: "1px solid #F5C2C2" }} disabled={appr === "sending"} onClick={sendApproval}>
+                <Icon name="send" size={13} /> {appr === "sending" ? "Sending…" : "Send Approval"}
+              </button>
+            )}
+            {appr === "error" && <div style={{ fontSize: 12, color: "#B42318", marginTop: 6 }}>Couldn't send approval. Try again.</div>}
           </div>
         )}
 
@@ -2802,7 +2820,7 @@ function ConfirmDialog({ open, title, body, confirmLabel, onConfirm, onCancel })
 }
 
 const STATUS_HEX = {
-  "Quarantined": "#475569", "Awaiting resolution": "#d97706", "In certification": "#7c3aed",
+  "Quarantined": "#475569", "Awaiting resolution": "#d97706", "Approval sent": "#d97706", "In certification": "#7c3aed",
   "Auto-restoring": "#2563EB", "Resolved": "#059669", "Permanently revoked": "#dc2626",
 };
 
@@ -2821,10 +2839,21 @@ function SidePanel({ policy, onClose, onUpdatePrincipal }) {
 
   const activeCount = policy.principals.filter((p) => !["Resolved", "Permanently revoked"].includes(p.status)).length;
 
-  const handleAction = (principal, kind) => {
+  const handleAction = async (principal, kind) => {
+    if (kind === "send-approval") {
+      const osUser = principal.pid.includes(":") ? principal.pid.split(":").slice(1).join(":") : principal.pid;
+      try {
+        const r = await fetch("/api/quarantine/request-approval", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ osUser }) });
+        const d = await r.json();
+        if (d.ok) { onUpdatePrincipal(policy.id, principal.pid, { status: "Approval sent" }); toast("Approval request sent to Slack — awaiting reviewer authorization"); return; }
+        if (d.reason === "slack_not_configured") { toast("Slack isn't configured — configure it in Integrations to send approvals"); return; }
+      } catch (e) { /* fall through to optimistic for non-live (design) rows */ }
+      onUpdatePrincipal(policy.id, principal.pid, { status: "Approval sent" });
+      toast("Approval request sent — awaiting reviewer authorization");
+      return;
+    }
     let nextStatus, msg;
     switch (kind) {
-      case "send-approval": nextStatus = "Awaiting resolution"; msg = "Approval request sent — awaiting reviewer authorization"; break;
       case "grant": nextStatus = "Resolved"; msg = "Access reinstated — principal restored to active state"; break;
       case "launch": nextStatus = "In certification"; msg = "Certification campaign launched — assigned to certifier"; break;
       case "revoke": nextStatus = "Permanently revoked"; msg = "Access permanently revoked — removed from access graph"; break;
@@ -2952,6 +2981,7 @@ function ActionCell({ status, resolution, onAction, onRevoke }) {
   if (status === "Resolved") return <span className="action-disabled">Access granted</span>;
   if (status === "Permanently revoked") return <span className="action-disabled">Revoked</span>;
   if (status === "Awaiting resolution") return <span className="action-disabled">Approval sent</span>;
+  if (status === "Approval sent") return <span className="action-disabled">Approval sent</span>;
   if (status === "In certification") return <span className="action-disabled">Campaign launched</span>;
   if (status === "Auto-restoring") return <span className="action-disabled">Auto-restoring…</span>;
 

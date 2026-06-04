@@ -151,6 +151,36 @@ export async function fetchSlackChannels(token: string): Promise<{ id: string; n
   }
 }
 
+// Send a quarantine reinstatement approval request to the configured channel.
+export async function sendQuarantineApprovalMessage(
+  token: string, channel: string,
+  opts: { principal: string; policyName: string; approver?: string; detail?: string },
+): Promise<{ ok: boolean; error?: string; ts?: string }> {
+  try {
+    const lines = [
+      `:rotating_light: *Access reinstatement requested*`,
+      `*Principal:* ${opts.principal}`,
+      `*Reason:* ${opts.policyName}`,
+    ];
+    if (opts.detail)   lines.push(`*Detail:* ${opts.detail}`);
+    if (opts.approver) lines.push(`*Approver:* ${opts.approver}`);
+    const data = await slackPost('chat.postMessage', token, {
+      channel,
+      text: `Access reinstatement approval requested for ${opts.principal}`,
+      blocks: [
+        { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
+        { type: 'actions', elements: [
+          { type: 'button', text: { type: 'plain_text', text: 'Approve & restore' }, style: 'primary', value: `approve:${opts.principal}`, action_id: 'reva_approve' },
+          { type: 'button', text: { type: 'plain_text', text: 'Deny' }, style: 'danger', value: `deny:${opts.principal}`, action_id: 'reva_deny' },
+        ] },
+      ],
+    });
+    return { ok: data.ok, error: data.error, ts: data.ts };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // Send test message
 export async function sendSlackTestMessage(token: string, channel: string): Promise<{ ok: boolean; error?: string }> {
   try {
