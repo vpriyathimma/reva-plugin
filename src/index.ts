@@ -322,14 +322,12 @@ import { quarantineRouter }     from './api/quarantine';
 import { streamRouter }         from './api/stream';
 import { ruleConfigRouter }     from './api/ruleConfig';
 import { approverConfigRouter } from './api/approverConfig';
-import { integrationsConfigRouter } from './api/integrationsConfig';
 import { policySetsRouter } from './api/policySets';
 app.use('/api', securityConfigRouter);
 app.use('/api', quarantineRouter);
 app.use('/api', streamRouter);
 app.use('/api', ruleConfigRouter);
 app.use('/api', approverConfigRouter);
-app.use('/api', integrationsConfigRouter);
 app.use('/api', policySetsRouter);
 
 // Classification config routes
