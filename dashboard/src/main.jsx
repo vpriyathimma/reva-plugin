@@ -22,7 +22,7 @@ const RevaStore = {
   state: {
     loading: true,
     sessions: [], decisions: [], quarantine: { quarantined: [], policies: [], capped_sessions: [], spawn_limit: 5 },
-    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [],
+    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [],
   },
   subs: new Set(),
   set(patch) { this.state = { ...this.state, ...patch }; this.subs.forEach((f) => f()); },
@@ -39,11 +39,12 @@ let _refetching = false;
 async function revaRefetch() {
   if (_refetching) return; _refetching = true;
   try {
-    const [sess, dec, q, tr] = await Promise.all([
+    const [sess, dec, q, tr, term] = await Promise.all([
       jget("/api/sessions").catch(() => ({ sessions: [] })),
       jget("/api/decisions").catch(() => ({ decisions: [] })),
       jget("/api/quarantine").catch(() => ({ quarantined: [], policies: [], capped_sessions: [], spawn_limit: 5 })),
       jget("/api/trust").catch(() => ({ trust: {} })),
+      jget("/api/session/terminated").catch(() => ({ terminated: [] })),
     ]);
     RevaStore.set({
       loading: false,
@@ -51,6 +52,7 @@ async function revaRefetch() {
       decisions: dec.decisions || [],
       quarantine: q,
       trust: tr.trust || {},
+      terminated: term.terminated || [],
     });
   } finally { _refetching = false; }
 }
@@ -83,6 +85,19 @@ function revaStart() {
   setInterval(revaRefetch, 15000);
 }
 
+// Session key matches the server's terminate key: "<oauth_email|user_email>::<hostname>".
+function sessionTermKey(sess) {
+  return `${sess.oauth_email || sess.user_email}::${sess.hostname || "unknown"}`;
+}
+async function revaTerminateSession(key, terminate) {
+  try {
+    await fetch(terminate ? "/api/session/terminate" : "/api/session/restore", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }),
+    });
+    await revaRefetch();
+  } catch (e) {}
+}
+
 // React subscription hook
 function useReva() {
   const [, force] = React.useReducer((x) => x + 1, 0);
@@ -96,6 +111,16 @@ function osUserOf(sess) {
   return (sess.developer_name && sess.developer_name.trim())
     || (sess.user_email ? sess.user_email.split("@")[0] : "")
     || sess.user_id || "developer";
+}
+// Reject unresolved/placeholder principals (e.g. literal "$USER", hook service
+// accounts, empty/unknown) so they never surface as governed identities.
+function isRealUser(u) {
+  if (!u) return false;
+  const x = String(u).trim().toLowerCase();
+  if (!x || x.includes("$") || x === "unknown" || x === "developer") return false;
+  if (x.startsWith("claude-code-hook") || x.startsWith("cowork-hook")) return false;
+  if (x.includes("@reva.ai") && x.includes("hook")) return false;
+  return true;
 }
 function principalOf(osUser) { return 'Developer::"' + osUser + '"'; }
 function relTime(iso) {
@@ -131,18 +156,20 @@ function deriveAll(s) {
   (s.quarantine.quarantined || []).forEach((q) => { quarantinedUsers[q.osUser] = q; });
   const cappedSessions = new Set(s.quarantine.capped_sessions || []);
 
-  // group sessions by developer
+  // group sessions by developer (skip placeholder/unresolved principals)
   const byUser = new Map();
   (s.sessions || []).forEach((sess) => {
     const u = osUserOf(sess);
+    if (!isRealUser(u)) return;
     if (!byUser.has(u)) byUser.set(u, []);
     byUser.get(u).push(sess);
   });
 
-  // recent decisions per user
+  // recent decisions per user (skip placeholders)
   const decByUser = new Map();
   (s.decisions || []).forEach((d) => {
     const u = (d.user_email || "").includes("@") ? d.user_email.split("@")[0] : (d.user_email || "");
+    if (!isRealUser(u)) return;
     if (!decByUser.has(u)) decByUser.set(u, []);
     decByUser.get(u).push(d);
   });
@@ -166,6 +193,18 @@ function deriveAll(s) {
       sessions: sessions.length, trust, state, owner: WORKLOAD_OWNER,
       svid: latest.spiffe_id || ("agent-hash:" + (latest.session_id || "").slice(0, 8) + " (fallback)"),
       svidFallback: !latest.spiffe_id,
+      // developer-detail fields
+      hostname: latest.hostname || "—",
+      gitBranch: latest.git_branch || "",
+      gitRemote: latest.git_remote_url || "",
+      project: latest.project_name || "",
+      connectionType: latest.connection_type || "local",
+      sshClientIp: latest.ssh_client_ip || "",
+      accountUuid: latest.account_uuid || "",
+      orgUuid: latest.org_uuid || "",
+      jiraTicket: latest.jira_ticket_id || "",
+      enrolledAt: latest.enrolled_at || "",
+      sessionsList: sessions,
       budget: { used: Math.min(spawnUsed, 5), max: 5, note: state === "Spawn-capped" ? "budget reached this session" : (trust <= 60 ? "blocked — trust " + trust + " ≤ 60" : "") },
       tools: tools.length ? tools : ["ReadFile", "EditFile", "RunBash", "WriteFile"],
       mcp: (latest.mcp_servers_discovered || []).slice(0, 6),
@@ -176,11 +215,14 @@ function deriveAll(s) {
 
   // KPIs
   const governed = byUser.size;
+  const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
+  const newQuarantinesToday = (s.quarantine.quarantined || []).filter((q) => q.since && new Date(q.since) >= startToday).length;
   const kpis = {
     coverage: { governed, total: COVERAGE_TOTAL, ungoverned: Math.max(0, COVERAGE_TOTAL - governed) },
     active: roster.filter((r) => r.state === "Active").length,
     capped: roster.filter((r) => r.state === "Spawn-capped").length,
     quarantines: (s.quarantine.quarantined || []).length,
+    newQuarantinesToday,
     lowtrust: roster.filter((r) => r.trust <= 60).length,
   };
 
@@ -268,7 +310,7 @@ function deriveAll(s) {
   } catch (e) { aaiPolicies = []; }
 
   return { raw: s, loading: s.loading, roster, kpis, denyDonut: { permitPct, denyPct, legend }, highDeny, usage, logs,
-    aaiPolicies,
+    aaiPolicies, terminated: s.terminated || [],
     quarantine: s.quarantine, security: s.security, hitl: s.hitl, commands: s.commands, filezones: s.filezones, mcp: s.mcp };
 }
 
@@ -940,16 +982,16 @@ function Insights() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16, marginBottom: 16 }}>
         <KpiTile label="Governance Coverage" value={String(reva.kpis.coverage.governed)} sub={<span style={{ fontSize: 15, color: "var(--ink-3)", fontWeight: 600 }}>/ {reva.kpis.coverage.total} users</span>}
           foot={<Pill tone="amber">{reva.kpis.coverage.ungoverned} ungoverned</Pill>} active={filter === "coverage"} onClick={() => pickFilter("coverage")} />
-        <KpiTile label="Active" tone="green" value={count("active")} foot={<Trend dir="flat">healthy</Trend>} active={filter === "active"} onClick={() => pickFilter("active")} />
-        <KpiTile label="Spawn-capped" tone="amber" value={count("capped")} foot={<Trend dir="up">budget reached</Trend>} active={filter === "capped"} onClick={() => pickFilter("capped")} />
-        <KpiTile label="Active Quarantines" tone="red" value={count("quarantined")} foot={<Trend dir="up">1 new today</Trend>} active={filter === "quarantined"} onClick={() => pickFilter("quarantined")} />
-        <KpiTile label="Low Trust (≤ 60)" tone="red" value={count("lowtrust")} foot={<Trend dir="up">spawning blocked</Trend>} active={filter === "lowtrust"} onClick={() => pickFilter("lowtrust")} />
+        <KpiTile label="Active" tone="green" value={count("active")} foot={count("active") > 0 ? <Trend dir="flat">healthy</Trend> : null} active={filter === "active"} onClick={() => pickFilter("active")} />
+        <KpiTile label="Spawn-capped" tone="amber" value={count("capped")} foot={reva.kpis.capped > 0 ? <Trend dir="up">budget reached</Trend> : null} active={filter === "capped"} onClick={() => pickFilter("capped")} />
+        <KpiTile label="Active Quarantines" tone="red" value={count("quarantined")} foot={reva.kpis.quarantines > 0 ? <Trend dir="up">{reva.kpis.newQuarantinesToday} new today</Trend> : null} active={filter === "quarantined"} onClick={() => pickFilter("quarantined")} />
+        <KpiTile label="Low Trust (≤ 60)" tone="red" value={count("lowtrust")} foot={reva.kpis.lowtrust > 0 ? <Trend dir="up">below threshold</Trend> : null} active={filter === "lowtrust"} onClick={() => pickFilter("lowtrust")} />
       </div>
 
       {/* donut + high deny */}
       <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 16, marginBottom: 16 }}>
         <div className="card">
-          <CardHead title="Permit / Deny Rate" right={<><Segmented options={["Session", "System", "Identity"]} value={by} onChange={setBy} /><SelectChip>Last Week</SelectChip></>} />
+          <CardHead title="Permit / Deny Rate" right={<><Segmented options={["Session", "Identity"]} value={by} onChange={setBy} /><SelectChip>Last Week</SelectChip></>} />
           <div style={{ display: "flex", alignItems: "center", gap: 28, padding: "20px 22px" }}>
             <Donut size={172} thickness={24}
               segments={[{ value: reva.denyDonut.permitPct, color: "#16A34A" }, ...denyLegend]}
@@ -1005,12 +1047,16 @@ function Insights() {
           <span className="help">{filtered.length} of {ROSTER.length} principals</span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
             <Search placeholder="Search identities…" width={240} />
-            <Segmented options={["Session", "System", "Identity"]} value={pivot} onChange={setPivot} />
+            <Segmented options={["Identity", "Session"]} value={pivot} onChange={setPivot} />
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16, alignItems: "start" }}>
           <RosterTable rows={filtered} selectedId={row ? row.id : null} onSelect={setSelId} />
-          {row ? <AgentDetail row={row} /> : <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--ink-4)" }}>No identity selected.</div>}
+          {row
+            ? (pivot === "Session"
+                ? <SessionsPanel row={row} terminated={reva.terminated} />
+                : <AgentDetail row={row} />)
+            : <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--ink-4)" }}>No identity selected.</div>}
         </div>
       </div>
 
@@ -1255,15 +1301,20 @@ function Field({ label, children, mono }) {
 
 function AgentDetail({ row }) {
   const quarantined = row.state === "Quarantined";
+  const reinstate = () => {
+    const osUser = (row.id.match(/"([^"]+)"/) || [])[1] || "";
+    if (!osUser) return;
+    fetch("/api/quarantine/reinstate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ osUser }) }).then(() => revaRefetch()).catch(() => {});
+  };
   return (
     <div className="card" style={{ overflow: "hidden", position: "sticky", top: 60 }}>
       <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 11 }}>
         <span style={{ width: 34, height: 34, borderRadius: 9, flex: "none", display: "grid", placeItems: "center",
-          background: row.kind === "dev" ? "var(--blue-tint)" : "var(--purple-tint)", color: row.kind === "dev" ? "var(--blue-700)" : "var(--purple)" }}>
-          <Icon name={row.kind === "dev" ? "user" : "bot"} size={19} />
+          background: "var(--blue-tint)", color: "var(--blue-700)" }}>
+          <Icon name="user" size={19} />
         </span>
         <div style={{ minWidth: 0 }}>
-          <div className="section-title" style={{ fontSize: 14.5 }}>{row.kind === "dev" ? "Developer Details" : "Agent Details"}</div>
+          <div className="section-title" style={{ fontSize: 14.5 }}>Developer Details</div>
           <div className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.id}</div>
         </div>
       </div>
@@ -1275,79 +1326,95 @@ function AgentDetail({ row }) {
               <Icon name="lock" size={17} color="var(--red)" />
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)" }}>Access Quarantined</div>
-                <div style={{ fontSize: 12.5, color: "#B42318", marginTop: 2 }}>Repeated authorization denial. Awaiting reinstatement.</div>
+                <div style={{ fontSize: 12.5, color: "#B42318", marginTop: 2 }}>Awaiting reinstatement.</div>
               </div>
             </div>
-            <button className="btn btn-danger btn-sm" style={{ marginTop: 11, width: "100%", background: "#fff", color: "var(--red)", border: "1px solid #F5C2C2" }}>Reinstate (HITL)</button>
+            <button className="btn btn-danger btn-sm" style={{ marginTop: 11, width: "100%", background: "#fff", color: "var(--red)", border: "1px solid #F5C2C2" }} onClick={reinstate}>Reinstate</button>
           </div>
         )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Authenticated As">{row.email}</Field>
           <Field label="Owner">{row.owner}</Field>
+          <Field label="Operating System">{row.os}</Field>
+          <Field label="Hostname" mono>{row.hostname}</Field>
           <Field label="Model" mono>{row.model}</Field>
-          <Field label="Sessions">{row.sessions} active</Field>
+          <Field label="Active Sessions">{row.sessions}</Field>
+          <Field label="Connection">{row.connectionType === "ssh" ? `SSH${row.sshClientIp ? " · " + row.sshClientIp : ""}` : "Local"}</Field>
+          {row.project ? <Field label="Project" mono>{row.project}</Field> : null}
         </div>
+
+        {(row.gitBranch || row.gitRemote) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {row.gitBranch ? <Field label="Git Branch" mono>{row.gitBranch}</Field> : null}
+            {row.jiraTicket ? <Field label="Jira Ticket" mono>{row.jiraTicket}</Field> : null}
+            {row.gitRemote ? <div style={{ gridColumn: "1 / -1" }}><Field label="Git Remote" mono>{row.gitRemote}</Field></div> : null}
+          </div>
+        )}
 
         <Field label={row.svidFallback ? "Agent ID (SVID fallback)" : "SPIFFE / SVID"} mono>{row.svid}</Field>
         {row.svidFallback && <div className="help" style={{ marginTop: -10, color: "var(--amber-ink)" }}>No SVID issued — using agent-hash fallback.</div>}
 
-        {/* Spawn budget */}
-        <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 14, background: "var(--surface-2)" }}>
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 9 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)", whiteSpace: "nowrap" }}>Spawn Budget</span>
-            <span className="mono" style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", color: row.budget.max === 0 ? "var(--ink-4)" : (row.budget.used >= row.budget.max && row.budget.max ? "var(--red)" : "var(--ink)") }}>
-              {row.budget.max === 0 ? "—" : `${row.budget.used} / ${row.budget.max}`}
-            </span>
+        {(row.accountUuid || row.orgUuid) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {row.accountUuid ? <Field label="Account" mono>{String(row.accountUuid).slice(0, 12)}…</Field> : null}
+            {row.orgUuid ? <Field label="Org" mono>{String(row.orgUuid).slice(0, 12)}…</Field> : null}
           </div>
-          <div style={{ display: "flex", gap: 5 }}>
-            {[0, 1, 2, 3, 4].map((i) => {
-              const filled = row.budget.max > 0 && i < row.budget.used;
-              const avail = row.budget.max > 0 && i < row.budget.max;
-              return <div key={i} style={{ flex: 1, height: 7, borderRadius: 4,
-                background: filled ? (row.budget.used >= row.budget.max ? "var(--red)" : "var(--blue)") : (avail ? "var(--border-strong)" : "var(--surface-3)") }} />;
-            })}
-          </div>
-          {row.budget.note && <div className="help" style={{ marginTop: 9 }}>{row.budget.note}</div>}
-        </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-        {/* Persistent access */}
-        <div>
-          <div className="eyebrow" style={{ fontSize: 10.5, marginBottom: 9 }}>Persistent Access</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <div className="help" style={{ marginBottom: 6 }}>Inherited tool allowlist</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {row.tools.map((t) => <span key={t} className="mono" style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "var(--surface-3)", color: "var(--ink-2)", fontWeight: 600 }}>{t}</span>)}
-              </div>
-            </div>
-            <div>
-              <div className="help" style={{ marginBottom: 6 }}>MCP servers</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {row.mcp.map((t) => <span key={t} className="mono" style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "var(--purple-tint)", color: "var(--purple)", fontWeight: 600 }}>{t}</span>)}
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span className="help">Brokered GitHub App token</span>
-              <span className="mono" style={{ marginLeft: "auto", fontSize: 11.5, color: "var(--ink-2)" }}>{row.gh}</span>
-            </div>
-          </div>
+function SessionsPanel({ row, terminated }) {
+  const termSet = new Set(terminated || []);
+  const sessions = row.sessionsList || [];
+  const relTimeP = (iso) => {
+    if (!iso) return "";
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return "just now"; if (m < 60) return m + "m ago";
+    const h = Math.floor(m / 60); if (h < 24) return h + "h ago"; return Math.floor(h / 24) + "d ago";
+  };
+  return (
+    <div className="card" style={{ overflow: "hidden", position: "sticky", top: 60 }}>
+      <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 11 }}>
+        <span style={{ width: 34, height: 34, borderRadius: 9, flex: "none", display: "grid", placeItems: "center", background: "var(--blue-tint)", color: "var(--blue-700)" }}>
+          <Icon name="list" size={19} />
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div className="section-title" style={{ fontSize: 14.5 }}>Sessions</div>
+          <div className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.id}</div>
         </div>
-
-        {/* recent decisions */}
-        <div>
-          <div className="eyebrow" style={{ fontSize: 10.5, marginBottom: 9 }}>Recent Decisions</div>
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {row.decisions.map((d, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: i < row.decisions.length - 1 ? "1px solid var(--border)" : 0 }}>
-                <span className="mono" style={{ fontSize: 11, color: "var(--ink-4)", width: 30 }}>{d.t}</span>
-                <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-2)", width: 86 }}>{d.a}</span>
-                <Pill tone={d.e === "Permit" ? "green" : d.e === "HITL" ? "amber" : "red"}>{d.e}</Pill>
-                <span className="sub" style={{ fontSize: 12, marginLeft: "auto", textAlign: "right", flex: 1 }}>{d.r}</span>
+      </div>
+      <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
+        {sessions.length === 0 && <div className="help" style={{ textAlign: "center", padding: 20 }}>No active sessions.</div>}
+        {sessions.map((sx) => {
+          const key = `${sx.oauth_email || sx.user_email}::${sx.hostname || "unknown"}`;
+          const isTerm = termSet.has(key);
+          return (
+            <div key={sx.session_id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface-2)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span className="mono" style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)" }}>{String(sx.session_id || "").slice(0, 14)}</span>
+                {isTerm
+                  ? <span className="pill pill-red" style={{ marginLeft: 4 }}><span className="dot" />Terminated</span>
+                  : <span className="pill pill-green" style={{ marginLeft: 4 }}><span className="dot" />Active</span>}
+                <span className="help" style={{ marginLeft: "auto" }}>{relTimeP(sx.enrolled_at)}</span>
               </div>
-            ))}
-          </div>
-        </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 9 }}>
+                {sx.hostname ? <span className="help">host: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.hostname}</span></span> : null}
+                {sx.project_name ? <span className="help">project: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.project_name}</span></span> : null}
+                {sx.git_branch ? <span className="help">branch: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.git_branch}</span></span> : null}
+                <span className="help">{sx.connection_type === "ssh" ? "SSH" : "local"}</span>
+              </div>
+              <button
+                className="btn btn-sm"
+                style={{ marginTop: 11, width: "100%", background: "#fff", color: isTerm ? "var(--blue-700)" : "var(--red)", border: `1px solid ${isTerm ? "var(--border-strong)" : "#F5C2C2"}` }}
+                onClick={() => revaTerminateSession(key, !isTerm)}>
+                {isTerm ? "Restore session" : "Terminate session"}
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
