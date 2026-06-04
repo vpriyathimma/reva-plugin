@@ -22,7 +22,7 @@ const RevaStore = {
   state: {
     loading: true,
     sessions: [], decisions: [], quarantine: { quarantined: [], policies: [], capped_sessions: [], spawn_limit: 5 },
-    trust: {}, security: null, hitl: null, commands: [], filezones: [], mcp: [],
+    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [],
   },
   subs: new Set(),
   set(patch) { this.state = { ...this.state, ...patch }; this.subs.forEach((f) => f()); },
@@ -63,7 +63,7 @@ async function revaLoadConfigs() {
     jget("/api/config/filezones").catch(() => ({ rules: [] })),
     jget("/api/mcp-discovery").catch(() => ({ servers: [] })),
   ]);
-  RevaStore.set({ security: sec, hitl, commands: cmd.rules || [], filezones: fz.rules || [], mcp: mcp.servers || [] });
+  RevaStore.set({ security: sec, hitl, commands: cmd || { safe: [], restricted: [], destructive: [] }, filezones: (fz && fz.zones) || [], mcp: mcp.servers || [] });
 }
 
 let _started = false;
@@ -1567,10 +1567,10 @@ function Accordion({ title, subtitle, open, onToggle, children, saved }) {
   );
 }
 
-function ChipList({ tone, label, items }) {
-  const [chips, setChips] = React.useState(items);
+function ChipList({ tone, label, value, onChange }) {
+  const chips = value || [];
   const [val, setVal] = React.useState("");
-  const add = () => { if (val.trim()) { setChips([...chips, val.trim()]); setVal(""); } };
+  const add = () => { if (val.trim()) { onChange([...chips, val.trim()]); setVal(""); } };
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 14, background: "var(--surface-2)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 11 }}>
@@ -1582,7 +1582,7 @@ function ChipList({ tone, label, items }) {
         {chips.map((c, i) => (
           <span key={c + i} className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 600, padding: "4px 8px", borderRadius: 7, background: "#fff", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
             {c}
-            <button onClick={() => setChips(chips.filter((_, j) => j !== i))} style={{ border: 0, background: "transparent", padding: 0, display: "grid", placeItems: "center", color: "var(--ink-4)", cursor: "pointer" }}><Icon name="x" size={12} /></button>
+            <button onClick={() => onChange(chips.filter((_, j) => j !== i))} style={{ border: 0, background: "transparent", padding: 0, display: "grid", placeItems: "center", color: "var(--ink-4)", cursor: "pointer" }}><Icon name="x" size={12} /></button>
           </span>
         ))}
       </div>
@@ -1612,37 +1612,62 @@ function SaveBar({ onSave }) {
 }
 
 function DeveloperIntegration() {
+  const reva = useReva();
   const [open, setOpen] = React.useState(0);
-  const [hitl, setHitl] = React.useState(true);
-  const [provider, setProvider] = React.useState("Slack");
   const toggle = (i) => setOpen(open === i ? -1 : i);
+
+  // Command chips — seeded from live config, edited locally, saved on demand.
+  const [cmd, setCmd] = React.useState(reva.commands || { safe: [], restricted: [], destructive: [] });
+  const [zones, setZones] = React.useState(reva.filezones || []);
+  React.useEffect(() => { setCmd(reva.commands || { safe: [], restricted: [], destructive: [] }); }, [reva.commands]);
+  React.useEffect(() => { setZones(reva.filezones || []); }, [reva.filezones]);
+
+  const hitlCfg = reva.hitl || {};
+  const slackConnected = !!hitlCfg.slack_connected;
+  const hitlEnabled = hitlCfg.enabled !== false;
+  const provider = hitlCfg.integration === "okta" ? "Okta Verify" : "Slack";
+
+  const post = async (path, body) => {
+    try { await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); await revaLoadConfigs(); } catch (e) {}
+  };
+  const saveCommands = () => post("/api/config/commands", cmd);
+  const saveZones = () => post("/api/config/filezones", { zones });
+  const setHitl = (on) => post("/api/config/hitl", { enabled: on });
+  const setProvider = (p) => { if (p === "Slack" && !slackConnected) return; post("/api/config/hitl", { integration: p === "Okta Verify" ? "okta" : "slack" }); };
+  const addGlob = (zi) => { const g = window.prompt("Add glob pattern (e.g. src/** or *.pem)"); if (g && g.trim()) setZones(zones.map((z, i) => i === zi ? { ...z, globs: [...z.globs, g.trim()] } : z)); };
+  const removeGlob = (zi, gi) => setZones(zones.map((z, i) => i === zi ? { ...z, globs: z.globs.filter((_, j) => j !== gi) } : z));
 
   return (
     <div style={{ padding: 28, maxWidth: 1080 }}>
       {/* 1. Command Classification */}
-      <Accordion title="Command Classification" subtitle="Feeds the destructive-command guardrail at RunBash." open={open === 0} onToggle={() => toggle(0)} saved="2h ago">
+      <Accordion title="Command Classification" subtitle="Feeds the destructive-command guardrail at RunBash." open={open === 0} onToggle={() => toggle(0)}>
         <div style={{ padding: 20 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
-            <ChipList tone="green" label="Safe" items={["cat", "ls", "pwd", "git status", "npm test"]} />
-            <ChipList tone="amber" label="Restricted" items={["npm install", "git push", "docker build", "curl"]} />
-            <ChipList tone="red" label="Destructive" items={["rm -rf", "git reset --hard", "drop table", "kubectl delete"]} />
+            <ChipList tone="green" label="Safe" value={cmd.safe} onChange={(v) => setCmd({ ...cmd, safe: v })} />
+            <ChipList tone="amber" label="Restricted" value={cmd.restricted} onChange={(v) => setCmd({ ...cmd, restricted: v })} />
+            <ChipList tone="red" label="Destructive" value={cmd.destructive} onChange={(v) => setCmd({ ...cmd, destructive: v })} />
           </div>
         </div>
-        <SaveBar />
+        <SaveBar onSave={saveCommands} />
       </Accordion>
 
       {/* 2. File Sensitivity */}
-      <Accordion title="File Sensitivity Classification" subtitle="Sets the file_zone attribute used in drift and injection evaluation." open={open === 1} onToggle={() => toggle(1)} saved="1d ago">
+      <Accordion title="File Sensitivity Classification" subtitle="Sets the file_zone attribute used in drift and injection evaluation." open={open === 1} onToggle={() => toggle(1)}>
         <table className="tbl">
           <thead><tr><th>Zone</th><th>Glob patterns</th><th>Behavior</th></tr></thead>
           <tbody>
-            {ZONES.map((z) => (
+            {zones.map((z, zi) => (
               <tr key={z.zone}>
                 <td style={{ width: 140 }}><span className={`pill pill-${z.tone}`}><span className="dot" />{z.zone}</span></td>
                 <td>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {z.globs.map((g) => <span key={g} className="mono" style={{ fontSize: 11.5, padding: "3px 8px", borderRadius: 6, background: "var(--surface-3)", color: "var(--ink-2)", fontWeight: 600 }}>{g}</span>)}
-                    <button className="kebab" style={{ width: 26, height: 26 }}><Icon name="plus" size={14} /></button>
+                    {z.globs.map((g, gi) => (
+                      <span key={g + gi} className="mono" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, padding: "3px 8px", borderRadius: 6, background: "var(--surface-3)", color: "var(--ink-2)", fontWeight: 600 }}>
+                        {g}
+                        <button onClick={() => removeGlob(zi, gi)} style={{ border: 0, background: "transparent", padding: 0, display: "grid", placeItems: "center", color: "var(--ink-4)", cursor: "pointer" }}><Icon name="x" size={11} /></button>
+                      </span>
+                    ))}
+                    <button className="kebab" style={{ width: 26, height: 26 }} onClick={() => addGlob(zi)}><Icon name="plus" size={14} /></button>
                   </div>
                 </td>
                 <td className="sub" style={{ fontSize: 12.5 }}>{z.desc}</td>
@@ -1650,11 +1675,11 @@ function DeveloperIntegration() {
             ))}
           </tbody>
         </table>
-        <SaveBar />
+        <SaveBar onSave={saveZones} />
       </Accordion>
 
       {/* 3. HITL */}
-      <Accordion title="HITL" subtitle="Human-in-the-loop approvals for high-sensitivity actions." open={open === 2} onToggle={() => toggle(2)} saved="3d ago">
+      <Accordion title="HITL" subtitle="Human-in-the-loop approvals for high-sensitivity actions." open={open === 2} onToggle={() => toggle(2)}>
         <div style={{ padding: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 12 }}>
             <Icon name="lock" size={20} color="var(--blue)" />
@@ -1662,35 +1687,42 @@ function DeveloperIntegration() {
               <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--ink)" }}>Require human approval for high-sensitivity actions</div>
               <div className="help" style={{ marginTop: 2 }}>Protected-branch writes, Secret-zone access, and MCP writes pause for approval.</div>
             </div>
-            <Toggle on={hitl} onClick={() => setHitl(!hitl)} />
+            <Toggle on={hitlEnabled} onClick={() => setHitl(!hitlEnabled)} />
           </div>
 
-          <div style={{ marginTop: 16, opacity: hitl ? 1 : 0.45, pointerEvents: hitl ? "auto" : "none", transition: "opacity .2s" }}>
+          <div style={{ marginTop: 16, opacity: hitlEnabled ? 1 : 0.45, pointerEvents: hitlEnabled ? "auto" : "none", transition: "opacity .2s" }}>
             <div className="eyebrow" style={{ fontSize: 10.5, marginBottom: 10 }}>Approval provider</div>
             <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-              {["Slack", "Okta Verify"].map((p) => (
-                <button key={p} onClick={() => setProvider(p)} style={{
-                  flex: 1, display: "flex", alignItems: "center", gap: 11, padding: "14px 16px", textAlign: "left",
-                  border: `1.5px solid ${provider === p ? "var(--blue)" : "var(--border-strong)"}`, borderRadius: 12,
-                  background: provider === p ? "var(--blue-tint)" : "#fff", cursor: "pointer",
-                }}>
-                  <span style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${provider === p ? "var(--blue)" : "var(--border-strong)"}`, display: "grid", placeItems: "center" }}>
-                    {provider === p && <span style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--blue)" }} />}
-                  </span>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>{p}</div>
-                    <div className="help" style={{ fontSize: 11.5 }}>{p === "Slack" ? "Channel approval card" : "Mobile push approval"}</div>
-                  </div>
-                </button>
-              ))}
+              {["Slack", "Okta Verify"].map((p) => {
+                const disabled = p === "Slack" && !slackConnected;
+                return (
+                  <button key={p} onClick={() => setProvider(p)} disabled={disabled} title={disabled ? "Connect Slack in Integrations first" : ""} style={{
+                    flex: 1, display: "flex", alignItems: "center", gap: 11, padding: "14px 16px", textAlign: "left",
+                    border: `1.5px solid ${provider === p ? "var(--blue)" : "var(--border-strong)"}`, borderRadius: 12,
+                    background: provider === p ? "var(--blue-tint)" : "#fff", cursor: disabled ? "not-allowed" : "pointer",
+                    opacity: disabled ? 0.5 : 1,
+                  }}>
+                    <span style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${provider === p ? "var(--blue)" : "var(--border-strong)"}`, display: "grid", placeItems: "center" }}>
+                      {provider === p && <span style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--blue)" }} />}
+                    </span>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>{p}</div>
+                      <div className="help" style={{ fontSize: 11.5 }}>{p === "Slack" ? (slackConnected ? "Channel approval card" : "Not connected") : "Mobile push approval"}</div>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: "var(--surface-2)", borderRadius: 10, border: "1px solid var(--border)" }}>
-              <span className="pill pill-green"><span className="dot" />{provider === "Slack" ? "Slack #ai-approvals — connected" : "Okta Verify — connected"}</span>
+              {provider === "Slack"
+                ? (slackConnected
+                    ? <span className="pill pill-green"><span className="dot" />Slack {hitlCfg.slack_channel || "#approvals"} — connected</span>
+                    : <span className="pill pill-amber"><span className="dot" />Slack — not connected</span>)
+                : <span className="pill pill-green"><span className="dot" />Okta Verify — connected</span>}
               <a href="#" className="help" style={{ marginLeft: "auto", color: "var(--blue)", fontWeight: 600, textDecoration: "none" }}>Configure providers in Integrations → Approval Channel →</a>
             </div>
           </div>
         </div>
-        <SaveBar />
       </Accordion>
     </div>
   );
@@ -2171,30 +2203,89 @@ function ProviderCard({ p, selected, onClick }) {
   );
 }
 
+function SlackConnectionSettings() {
+  const reva = useReva();
+  const hitl = reva.hitl || {};
+  const connected = !!hitl.slack_connected;
+  const [token, setToken] = React.useState("");
+  const [applying, setApplying] = React.useState(false);
+  const [applyMsg, setApplyMsg] = React.useState(null);
+  const [channels, setChannels] = React.useState([]);
+  const [fetching, setFetching] = React.useState(false);
+  const [testState, setTestState] = React.useState("idle");
+
+  const apply = async () => {
+    if (!token.trim()) return;
+    setApplying(true); setApplyMsg(null);
+    try {
+      const r = await fetch("/api/hitl/slack/apply-token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: token.trim() }) });
+      const d = await r.json();
+      if (d.ok) { setApplyMsg({ ok: true, team: d.team }); setToken(""); await revaLoadConfigs(); }
+      else setApplyMsg({ ok: false, error: d.error || "Invalid token" });
+    } catch (e) { setApplyMsg({ ok: false, error: "Network error" }); }
+    setApplying(false);
+  };
+  const fetchChannels = async () => {
+    setFetching(true);
+    try { const r = await fetch("/api/hitl/slack/channels"); const d = await r.json(); if (d.ok) setChannels(d.channels || []); } catch (e) {}
+    setFetching(false);
+  };
+  const selectChannel = async (e) => {
+    const c = channels.find((x) => (x.id || x.name) === e.target.value);
+    if (!c) return;
+    await fetch("/api/config/hitl", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slack_channel: "#" + String(c.name || "").replace(/^#/, ""), slack_channel_id: c.id || "" }) });
+    await revaLoadConfigs();
+  };
+  const setExpiry = async (v) => { await fetch("/api/config/hitl", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approval_expiry_minutes: parseInt(v, 10) || 60 }) }); };
+  const test = async () => { setTestState("sending"); try { const r = await fetch("/api/hitl/slack/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }); const d = await r.json(); setTestState(d.ok ? "ok" : "err"); } catch (e) { setTestState("err"); } };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <FieldGroup label="Bot Token" required helper={connected ? "A token is applied. Paste a new one to replace it." : "Starts with xoxb-. Stored encrypted."}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input value={token} onChange={(e) => setToken(e.target.value)} placeholder={connected ? "xoxb-•••••••• (applied)" : "xoxb-…"} className="mono" style={inputStyle} />
+          <button className="btn btn-ghost" style={{ height: 40 }} onClick={apply} disabled={applying || !token.trim()}>{applying ? "Applying…" : "Apply"}</button>
+        </div>
+        {applyMsg && (applyMsg.ok
+          ? <span className="pill pill-green" style={{ alignSelf: "flex-start" }}><Icon name="check" size={13} /> Connected — {applyMsg.team}</span>
+          : <span className="pill pill-red" style={{ alignSelf: "flex-start" }}>{applyMsg.error}</span>)}
+        {connected && !applyMsg && <span className="pill pill-green" style={{ alignSelf: "flex-start" }}><span className="dot" />Connected</span>}
+      </FieldGroup>
+
+      <FieldGroup label="Channel" helper="The bot must be invited to this channel.">
+        <div style={{ display: "flex", gap: 8 }}>
+          {channels.length
+            ? <select onChange={selectChannel} defaultValue={hitl.slack_channel_id || ""} style={{ ...inputStyle, flex: 1 }}>
+                <option value="" disabled>Select a channel…</option>
+                {channels.map((c) => <option key={c.id || c.name} value={c.id || c.name}>#{String(c.name || "").replace(/^#/, "")}</option>)}
+              </select>
+            : <div className="selchip" style={{ flex: 1, justifyContent: "space-between", height: 40, display: "flex", alignItems: "center", padding: "0 12px" }}>{hitl.slack_channel || "No channel selected"}</div>}
+          <button className="btn btn-ghost" style={{ height: 40 }} onClick={fetchChannels} disabled={fetching || !connected}><Icon name="rotate" size={15} /> {fetching ? "Fetching…" : "Fetch channels"}</button>
+        </div>
+      </FieldGroup>
+
+      <FieldGroup label="Approval expiry (minutes)">
+        <input style={{ ...inputStyle, width: 140 }} defaultValue={hitl.approval_expiry_minutes || 60} className="mono" onBlur={(e) => setExpiry(e.target.value)} />
+      </FieldGroup>
+
+      <FieldGroup label="Approver email mapping" helper="osUser → email used to address the approval request."><EmailMapTable /></FieldGroup>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button className="btn btn-ghost" style={{ height: 38 }} onClick={test} disabled={!connected || testState === "sending"}>Send test message</button>
+        {testState === "ok" && <span className="pill pill-green"><Icon name="check" size={13} /> Sent — check the channel</span>}
+        {testState === "sending" && <span className="help">Sending…</span>}
+        {testState === "err" && <span className="pill pill-red">Failed — check token/channel</span>}
+      </div>
+    </div>
+  );
+}
+
 function ConnectionSettings({ provider, category }) {
   const id = provider ? provider.id : null;
   const helper = "Joined against Reva SessionStart events to compute Governance Coverage.";
 
   if (id === "slack") {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-        <FieldGroup label="Bot Token" required helper="Starts with xoxb-. Stored encrypted.">
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ ...inputStyle, display: "flex", alignItems: "center", letterSpacing: 1 }} className="mono">xoxb-••••••••••••••••</div>
-            <CopyBtn size={40} /><button className="btn btn-ghost" style={{ height: 40 }}>Apply</button>
-          </div>
-        </FieldGroup>
-        <FieldGroup label="Channel" helper="The bot must be invited to this channel.">
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="selchip" style={{ flex: 1, justifyContent: "space-between", height: 40 }}>#ai-approvals <Icon name="chevDown" size={15} color="var(--ink-4)" /></button>
-            <button className="btn btn-ghost" style={{ height: 40 }}><Icon name="rotate" size={15} /> Fetch channels</button>
-          </div>
-        </FieldGroup>
-        <FieldGroup label="Approval expiry (minutes)"><input style={{ ...inputStyle, width: 140 }} defaultValue="60" className="mono" /></FieldGroup>
-        <FieldGroup label="Approver email mapping" helper="osUser → email used to address the approval request."><EmailMapTable /></FieldGroup>
-        <TestButton label="Send test message" />
-      </div>
-    );
+    return <SlackConnectionSettings />;
   }
   if (id === "oktaverify") {
     return (

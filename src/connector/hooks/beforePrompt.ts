@@ -8,7 +8,7 @@ import { logDecision }                from '../discovery/enroll';
 import { getOrCreateSessionTrace, evaluateCedar, buildClaudeCodeInjectionPayload } from '../../api/pdpEvaluate';
 
 import { subagentContextStore } from './beforeToolCall';
-import { isQuarantined } from '../../api/quarantine';
+import { isQuarantined, clip as quarantineClip } from '../../api/quarantine';
 import { isEnabled } from '../../api/securityConfig';
 
 export const sessionIntentStore = new Map<string, {
@@ -143,6 +143,12 @@ export async function handlePromptSubmit(req: Request, res: Response) {
 
     if (isInjection || isJailbreak) {
       const detection   = isInjection ? 'prompt_injection' : 'jailbreak_attempt';
+      // Prompt Injection Detection (AAI-UAP-001) — quarantine on detection when
+      // the master switch is on. This branch only runs while prompt_injection is
+      // enabled (scores are zeroed otherwise), so no extra injection gate needed.
+      if (isEnabled('quarantine_access')) {
+        quarantineClip({ osUser: user_email, policyId: 'AAI-UAP-001', reason: `${detection} detected in prompt` });
+      }
       const projectName = (req.body.project_name as string) || 'unknown';
       let cedarResult;
       try {
