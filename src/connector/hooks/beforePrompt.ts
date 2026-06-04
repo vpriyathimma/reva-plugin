@@ -5,6 +5,8 @@
 import { Request, Response }          from 'express';
 import { classifyPrompt, recordBypassAttempt, recordBlock, getPersistentTrust } from '../../api/intentClassifier';
 import { logDecision }                from '../discovery/enroll';
+import { sessionStore }               from '../discovery/enroll';
+import { claudeSessionUserStore }     from './onSessionStart';
 import { getOrCreateSessionTrace, evaluateCedar, buildClaudeCodeInjectionPayload } from '../../api/pdpEvaluate';
 
 import { subagentContextStore } from './beforeToolCall';
@@ -34,8 +36,16 @@ export async function handlePromptSubmit(req: Request, res: Response) {
     const {
       session_id   = `session-${Date.now()}`,
       prompt       = '',
-      user_email   = osUserFromHeader || (req as any).user?.email || 'claude-code-hook@reva.ai',
     } = req.body;
+    // Resolve the developer identity the SAME way the tool-call hook does, so a
+    // quarantine clipped at PreToolUse (e.g. Ephemeral Agent Surge) is matched
+    // here at UserPromptSubmit. Header first, then session stores, then body.
+    const user_email = osUserFromHeader
+      || claudeSessionUserStore.get(session_id)
+      || sessionStore.get(session_id)?.user_email
+      || (req.body.user_email as string)
+      || (req as any).user?.email
+      || 'claude-code-hook@reva.ai';
 
     // Detect ! prefix bypass attempts — log only, do NOT fire Cedar
     const isBypassAttempt = prompt.trim().startsWith('!');
