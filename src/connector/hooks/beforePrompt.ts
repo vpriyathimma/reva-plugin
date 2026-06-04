@@ -66,11 +66,12 @@ export async function handlePromptSubmit(req: Request, res: Response) {
         effect: 'Deny', reason: qRec.policyName, intent: 'access_hold', agent_type: 'main',
       });
       return res.json({
-        hookSpecificOutput: {
-          hookEventName: 'UserPromptSubmit',
-          permissionDecision: 'deny',
-          permissionDecisionReason: qRec.message,
-        },
+        // UserPromptSubmit blocks via root-level decision:"block" + reason.
+        // (permissionDecision is PreToolUse-only and is ignored here, which let
+        // the prompt through.) "block" erases the prompt and shows the reason.
+        decision: 'block',
+        reason: qRec.message,
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit' },
         reva: { effect: 'Deny', reason: qRec.policyName },
       });
     }
