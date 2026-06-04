@@ -197,6 +197,15 @@ app.post('/api/pdp/hook', async (req, res) => {
         timestamp: ts,
       });
 
+      // Quarantine on detected injection (AAI-UAP-001), gated by the master
+      // switch — same as the prompt-level path, so injection caught in a tool
+      // result or ingested file quarantines the developer too.
+      try {
+        if (require('./api/securityConfig').isEnabled('quarantine_access')) {
+          require('./api/quarantine').clip({ osUser: user_email, policyId: 'AAI-UAP-001', reason: `${detection} detected in ${fp}` });
+        }
+      } catch (e) { /* never break the scan */ }
+
       let cedarResult;
       try {
         cedarResult = await evaluateCedar(buildClaudeCodeInjectionPayload({
