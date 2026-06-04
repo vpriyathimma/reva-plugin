@@ -1,10 +1,11 @@
-// Approver directory — a shared list of approver emails plus an osUser→approver
-// mapping. Used both for Slack HITL approval addressing and for quarantine
-// reinstatement approvals, so a single approver selection drives both flows.
+// Approver directory — a list of known approver emails plus a single selected
+// approver. The selected approver receives ALL approval requests for now
+// (quarantine reinstatement, short-lived SVID tokens, etc.) — there is no
+// per-osUser mapping.
 //
 // The known-approver list seeds from env (REVA_APPROVERS, comma-separated) or a
-// sensible default, and can be extended at runtime. The map is what the console
-// edits via the Slack "Approver email mapping" dropdown.
+// sensible default, and can be extended at runtime. `selected` is what the
+// console sets via the Approver dropdown.
 
 import { Router, Request, Response } from 'express';
 
@@ -12,16 +13,14 @@ const seed = (process.env.REVA_APPROVERS || 'sai.srungaram@reva.ai,yash.prakash@
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 let knownApprovers: string[] = Array.from(new Set(seed));
-let approverMap: Record<string, string> = {};  // osUser -> approver email
+let selectedApprover: string = knownApprovers[0] || '';
 
 export function getKnownApprovers(): string[] { return knownApprovers; }
-export function getApproverMap(): Record<string, string> { return approverMap; }
+export function getSelectedApprover(): string { return selectedApprover; }
 
-// Resolve the approver for a developer; falls back to the first known approver.
-export function getApproverFor(osUser: string): string {
-  if (!osUser) return knownApprovers[0] || '';
-  const key = String(osUser).toLowerCase();
-  return approverMap[key] || approverMap[key.split('@')[0]] || knownApprovers[0] || '';
+// Single global approver — osUser is ignored (kept for signature compatibility).
+export function getApproverFor(_osUser?: string): string {
+  return selectedApprover || knownApprovers[0] || '';
 }
 
 export function addApprover(email: string): void {
@@ -31,24 +30,19 @@ export function addApprover(email: string): void {
 export const approverConfigRouter = Router();
 
 approverConfigRouter.get('/config/approvers', (_req: Request, res: Response) => {
-  res.json({ approvers: knownApprovers, map: approverMap });
+  res.json({ approvers: knownApprovers, selected: selectedApprover });
 });
 
 approverConfigRouter.post('/config/approvers', (req: Request, res: Response) => {
   const body = req.body || {};
   if (Array.isArray(body.approvers)) {
     knownApprovers = Array.from(new Set(body.approvers.map((s: any) => String(s).trim()).filter(Boolean)));
+    if (selectedApprover && !knownApprovers.includes(selectedApprover)) knownApprovers.push(selectedApprover);
   }
-  if (body.map && typeof body.map === 'object') {
-    const next: Record<string, string> = {};
-    for (const [k, v] of Object.entries(body.map)) {
-      if (!k || !v) continue;
-      const email = String(v).trim();
-      next[String(k).toLowerCase()] = email;
-      if (!knownApprovers.includes(email)) knownApprovers.push(email);
-    }
-    approverMap = next;
+  if (typeof body.selected === 'string' && body.selected.trim()) {
+    selectedApprover = body.selected.trim();
+    if (!knownApprovers.includes(selectedApprover)) knownApprovers.push(selectedApprover);
   }
-  console.log(`[CONFIG:approvers] approvers=${knownApprovers.length} map=${JSON.stringify(approverMap)}`);
-  res.json({ approvers: knownApprovers, map: approverMap });
+  console.log(`[CONFIG:approvers] selected=${selectedApprover} approvers=${knownApprovers.length}`);
+  res.json({ approvers: knownApprovers, selected: selectedApprover });
 });

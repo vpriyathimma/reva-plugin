@@ -22,7 +22,7 @@ const RevaStore = {
   state: {
     loading: true,
     sessions: [], decisions: [], quarantine: { quarantined: [], policies: [], capped_sessions: [], spawn_limit: 5 },
-    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [], approvers: [], approverMap: {},
+    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [], approvers: [], approverSelected: "",
   },
   subs: new Set(),
   set(patch) { this.state = { ...this.state, ...patch }; this.subs.forEach((f) => f()); },
@@ -64,9 +64,9 @@ async function revaLoadConfigs() {
     jget("/api/config/commands").catch(() => ({ rules: [] })),
     jget("/api/config/filezones").catch(() => ({ rules: [] })),
     jget("/api/mcp-discovery").catch(() => ({ servers: [] })),
-    jget("/api/config/approvers").catch(() => ({ approvers: [], map: {} })),
+    jget("/api/config/approvers").catch(() => ({ approvers: [], selected: "" })),
   ]);
-  RevaStore.set({ security: sec, hitl, commands: cmd || { safe: [], restricted: [], destructive: [] }, filezones: (fz && fz.zones) || [], mcp: mcp.servers || [], approvers: appr.approvers || [], approverMap: appr.map || {} });
+  RevaStore.set({ security: sec, hitl, commands: cmd || { safe: [], restricted: [], destructive: [] }, filezones: (fz && fz.zones) || [], mcp: mcp.servers || [], approvers: appr.approvers || [], approverSelected: appr.selected || "" });
 }
 
 let _started = false;
@@ -2131,54 +2131,30 @@ function CodeBlock({ lines, label }) {
 function EmailMapTable() {
   const reva = useReva();
   const approvers = (reva.raw && reva.raw.approvers) || [];
-  const map = (reva.raw && reva.raw.approverMap) || {};
-  const [rows, setRows] = React.useState(null);
+  const selected = (reva.raw && reva.raw.approverSelected) || "";
+  const [val, setVal] = React.useState(null);
   const [saved, setSaved] = React.useState(false);
-  // seed editable rows from the live map (once it arrives)
-  React.useEffect(() => {
-    if (rows === null && Object.keys(map).length) setRows(Object.entries(map).map(([os, email]) => ({ os, email })));
-  }, [map]);
-  const list = rows || (Object.keys(map).length ? Object.entries(map).map(([os, email]) => ({ os, email })) : [{ os: "", email: approvers[0] || "" }]);
-  const update = (next) => { setRows(next); setSaved(false); };
+  React.useEffect(() => { if (val === null && selected) setVal(selected); }, [selected]);
+  const current = val !== null ? val : (selected || approvers[0] || "");
   const save = async () => {
-    const m = {};
-    list.forEach((r) => { if (r.os && r.email) m[r.os.toLowerCase()] = r.email; });
+    if (!current) return;
     try {
-      await fetch("/api/config/approvers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map: m }) });
+      await fetch("/api/config/approvers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selected: current }) });
       await revaLoadConfigs(); setSaved(true);
     } catch (e) {}
   };
   return (
     <div>
-      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-        <table className="tbl">
-          <thead><tr><th>osUser</th><th>Approver email</th><th></th></tr></thead>
-          <tbody>
-            {list.map((r, i) => (
-              <tr key={i}>
-                <td>
-                  <input value={r.os} onChange={(e) => update(list.map((x, j) => j === i ? { ...x, os: e.target.value } : x))}
-                    placeholder="osUser" className="mono" style={{ width: "100%", height: 32, border: "1px solid var(--border-strong)", borderRadius: 7, padding: "0 8px", fontSize: 12.5, outline: "none", background: "#fff" }} />
-                </td>
-                <td>
-                  <select value={r.email} onChange={(e) => update(list.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
-                    className="mono" style={{ width: "100%", height: 32, border: "1px solid var(--border-strong)", borderRadius: 7, padding: "0 8px", fontSize: 12.5, outline: "none", background: "#fff", color: "var(--ink-2)" }}>
-                    <option value="" disabled>Select approver…</option>
-                    {approvers.map((a) => <option key={a} value={a}>{a}</option>)}
-                  </select>
-                </td>
-                <td className="right"><button className="kebab" style={{ width: 28, height: 28 }} onClick={() => update(list.filter((_, j) => j !== i))}><Icon name="x" size={14} /></button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
-        <button className="btn btn-text btn-sm" style={{ paddingLeft: 4 }} onClick={() => update([...list, { os: "", email: approvers[0] || "" }])}><Icon name="plus" size={14} /> Add row</button>
-        <button className="btn btn-primary btn-sm" style={{ marginLeft: "auto" }} onClick={save}>Save mapping</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <select value={current} onChange={(e) => { setVal(e.target.value); setSaved(false); }}
+          className="mono" style={{ flex: 1, height: 36, border: "1px solid var(--border-strong)", borderRadius: 8, padding: "0 10px", fontSize: 13, outline: "none", background: "#fff", color: "var(--ink)" }}>
+          <option value="" disabled>Select approver…</option>
+          {approvers.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
         {saved && <span className="pill pill-green"><Icon name="check" size={13} /> Saved</span>}
       </div>
-      <div className="help" style={{ marginTop: 6 }}>The selected approver is used for both Slack approvals and quarantine reinstatement requests.</div>
+      <div className="help" style={{ marginTop: 8 }}>This approver receives all approval requests for now — quarantine reinstatement and short-lived SVID token requests.</div>
     </div>
   );
 }
@@ -2403,7 +2379,7 @@ function SlackConnectionSettings() {
         <input style={{ ...inputStyle, width: 140 }} defaultValue={hitl.approval_expiry_minutes || 60} className="mono" onBlur={(e) => setExpiry(e.target.value)} />
       </FieldGroup>
 
-      <FieldGroup label="Approver email mapping" helper="osUser → email used to address the approval request."><EmailMapTable /></FieldGroup>
+      <FieldGroup label="Approver" helper="Approval requests are addressed to this approver."><EmailMapTable /></FieldGroup>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button className="btn btn-ghost" style={{ height: 38 }} onClick={test} disabled={!connected || testState === "sending"}>Send test message</button>
@@ -2427,7 +2403,7 @@ function ConnectionSettings({ provider, category }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
         <FieldGroup label="Okta domain" required><input style={inputStyle} placeholder="acme.okta.com" /></FieldGroup>
         <FieldGroup label="Authorization server id"><input style={inputStyle} className="mono" placeholder="aus1a2b3c4D5e6F7g8" /></FieldGroup>
-        <FieldGroup label="Approver email mapping" helper="osUser → email mapped to an Okta Verify enrollment."><EmailMapTable /></FieldGroup>
+        <FieldGroup label="Approver" helper="Approval requests are addressed to this approver."><EmailMapTable /></FieldGroup>
         <TestButton label="Send test push" />
       </div>
     );
