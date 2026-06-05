@@ -658,6 +658,18 @@ function Icon({ name, size = 18, color = "currentColor", style }) {
     bot: <><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V4M9 5l3-1 3 1"/><circle cx="9.5" cy="13.5" r="1" fill={color} stroke="none"/><circle cx="14.5" cy="13.5" r="1" fill={color} stroke="none"/></>,
     x: <path d="M6 6l12 12M18 6L6 18" />,
     filter: <path d="M3 5h18l-7 8v6l-4-2v-4z" />,
+    download: <><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></>,
+    columns: <><rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/></>,
+    sitemap: <><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v3M6 16v-2h12v2"/></>,
+    sparkles: <><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M18.5 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></>,
+    fileCode: <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10.5 12l-2 2 2 2M13.5 12l2 2-2 2"/></>,
+    trash: <><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></>,
+    calendar: <><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 9h16M8 3v4M16 3v4"/></>,
+    flame: <path d="M12 3s5 3.5 5 8a5 5 0 0 1-10 0c0-2 1-3.5 2.5-4.5C9 8 10 5 12 3z" />,
+    coin: <><circle cx="12" cy="12" r="8"/><path d="M9.6 9.6a2.4 1.8 0 0 1 4.8 0c0 1.1-1 1.7-2.4 2S9.6 13 9.6 14.4a2.4 1.8 0 0 0 4.8 0M12 7v1.4M12 15.4V17"/></>,
+    play: <path d="M7 5l12 7-12 7z" />,
+    pin: <><path d="M12 21s6-5.3 6-10a6 6 0 0 0-12 0c0 4.7 6 10 6 10z"/><circle cx="12" cy="11" r="2"/></>,
+    bars: <><path d="M5 20V10M12 20V4M19 20v-7"/></>,
     rotate: <><path d="M20 11a8 8 0 1 0-1 5"/><path d="M20 5v6h-6"/></>,
     ext: <><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></>,
     alert: <><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></>,
@@ -3655,7 +3667,7 @@ Object.assign(window, { HomeDashboard, HomeApp });
 /* Main app shell: slim left rail + top bar + page header + pill tab bar + content router */
 
 const TABS = [
-  "Insights", "Policies", "Data", "Schema", "Version History",
+  "Insights", "Policies", "Guardrails", "Data", "Schema", "Version History",
   "Decision Logs", "Developer Integration", "Settings",
 ];
 
@@ -3673,41 +3685,52 @@ async function savePolicySet(id, enabled) {
   } catch (e) { /* keep UI responsive */ }
 }
 
-function PoliciesTab() {
+function GuardrailsTab() {
   const reva = useReva();
   const sets = reva.policySets || [];
+  const [q, setQ] = React.useState("");
+  const shown = sets.filter((s) => !q || s.name.toLowerCase().includes(q.toLowerCase()) || (s.description || "").toLowerCase().includes(q.toLowerCase()));
+  const onCount = sets.filter((s) => s.enabled !== false).length;
   return (
     <div style={{ padding: 28 }}>
       <div className="card" style={{ overflow: "hidden" }}>
-        <CardHead
-          title="Policy Sets"
-          right={<button className="btn btn-primary btn-sm" onClick={() => {}}>+ Create</button>}
-        />
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "18px 20px", borderBottom: "1px solid var(--border)" }}>
+          <div>
+            <div className="section-title">Guardrails</div>
+            <div className="help" style={{ marginTop: 2 }}>High-level protections evaluated before policies. Toggle to enable or suspend a guardrail across all sessions.</div>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            <div className="search" style={{ minWidth: 240 }}><Icon name="search" size={16} color="var(--ink-4)" /><input placeholder="Search guardrails…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+            <button className="btn btn-primary btn-sm" onClick={() => {}}><Icon name="plus" size={15} /> Create</button>
+          </div>
+        </div>
         <table className="tbl">
           <thead>
             <tr><th>Name</th><th>Description</th><th>Risk Level</th><th className="right">Enabled</th></tr>
           </thead>
           <tbody>
-            {sets.map((s) => (
-              <tr key={s.id}>
-                <td style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap" }}>{s.name}</td>
-                <td><span className="help">{s.description}</span></td>
-                <td><Pill tone={RISK_TONE[s.risk] || "gray"}>{s.risk}</Pill></td>
-                <td className="right">
-                  <Toggle on={s.enabled !== false} onClick={() => savePolicySet(s.id, !(s.enabled !== false))} />
-                </td>
-              </tr>
-            ))}
-            {sets.length === 0 && (
-              <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--ink-4)", padding: 32 }}>No policy sets.</td></tr>
+            {shown.map((s) => {
+              const on = s.enabled !== false;
+              return (
+                <tr key={s.id} style={{ opacity: on ? 1 : 0.6, transition: "opacity .15s" }}>
+                  <td style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap" }}>{s.name}</td>
+                  <td><span className="sub" style={{ fontSize: 13 }}>{s.description}</span></td>
+                  <td><Pill tone={RISK_TONE[s.risk] || "gray"}>{s.risk}</Pill></td>
+                  <td className="right"><Toggle on={on} onClick={() => savePolicySet(s.id, !on)} /></td>
+                </tr>
+              );
+            })}
+            {shown.length === 0 && (
+              <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--ink-4)", padding: 32 }}>No guardrails match.</td></tr>
             )}
           </tbody>
         </table>
+        <div className="tbl-foot">{sets.length} guardrails · {onCount === sets.length ? "all enabled" : `${onCount} of ${sets.length} enabled`}</div>
       </div>
     </div>
   );
 }
-window.PoliciesTab = PoliciesTab;
+window.GuardrailsTab = GuardrailsTab;
 
 const RAIL = [
   { id: "home", name: "Home", icon: "home" },
@@ -3855,6 +3878,7 @@ function App() {
   const map = {
     "Insights": window.Insights,
     "Policies": window.PoliciesTab,
+    "Guardrails": window.GuardrailsTab,
     "Decision Logs": window.DecisionLogs,
     "Developer Integration": window.DeveloperIntegration,
     "Settings": window.SettingsTab,
@@ -3896,5 +3920,714 @@ function App() {
     </div>
   );
 }
+
+
+/* ===== injected: real policy data ===== */
+const PO_DATA = [{"id": 1,"name": "Block Subagent File Edits","desc": "Spawned subagents cannot edit files.","principal": "ALL","resource": "ALL","action": "EditFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource\n) \n when { context has agent_type && context.agent_type == \"subagent\"};"},{"id": 2,"name": "Ticket Status Validation","desc": "Blocks edits when the linked Jira ticket exists but is not In Progress.","principal": "ALL","resource": "ALL","action": "EditFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_status && context.jira_status != \"\" && context.jira_status != \"In Progress\"};"},{"id": 3,"name": "Committer Identity Match","desc": "Blocks edits when the git committer email does not match the authenticated user.","principal": "ALL","resource": "ALL","action": "EditFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource\n) \n when { context has git_email && context.git_email != \"\" && context has oauth_email && context.oauth_email != \"\" && context.git_email != context.oauth_email};"},{"id": 4,"name": "Protected Branch Edit Guard","desc": "Blocks edits on protected branches without approver consent.","principal": "ALL","resource": "ALL","action": "EditFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource\n) \n when { context has github_branch_protected && context.github_branch_protected == true && context has approver_consent && context.approver_consent == false};"},{"id": 5,"name": "Subagent Command Execution","desc": "Allows spawned subagents to run Bash commands.","principal": "ALL","resource": "ALL","action": "RunBash","access": "Permit","code": "permit (\n    principal,\n    action == ClaudeCode::Action::\"RunBash\",\n    resource\n) \n when { context has agent_type && context.agent_type == \"subagent\"};"},{"id": 6,"name": "Forbid Destructive Bash Commands","desc": "Blocks shell commands classified as destructive.","principal": "ALL","resource": "ALL","action": "RunBash","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"RunBash\",\n    resource\n) \n when { context.command_risk == \"destructive\"};"},{"id": 7,"name": "Intent-Matched File Edit","desc": "Allows edits over SSH when an assigned Jira ticket is In Progress and trust is sufficient.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · File","action": "EditFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource is ClaudeCode::File\n) \n when { context has connection_type && context.connection_type == \"ssh\" && context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context has oauth_email && context.jira_assignee_email == context.oauth_email && context has jira_status && context.jira_status == \"In Progress\" && context has trust_score && context.trust_score > 30};"},{"id": 8,"name": "Block Prompt Injection","desc": "Blocks prompt submission when injection content is detected.","principal": "ALL","resource": "ALL","action": "SubmitPrompt","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"SubmitPrompt\",\n    resource\n) \n when { context has is_injection && context.is_injection};"},{"id": 9,"name": "Auth-Service Scoped Edit","desc": "Allows edits to reva-auth-service over SSH with an assigned in-progress ticket and sufficient trust.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · File","action": "EditFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource is ClaudeCode::File\n) \n when { context has project_name && context.project_name == \"reva-auth-service\" && context has connection_type && context.connection_type == \"ssh\" && context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context has oauth_email && context.jira_assignee_email == context.oauth_email && context has jira_status && context.jira_status == \"In Progress\" && context has trust_score && context.trust_score > 30};"},{"id": 10,"name": "Just-in-Time Access Validation","desc": "Allows commands when the SVID is active, the branch is protected, and trust exceeds 30.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · Command","action": "RunBash","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"RunBash\",\n    resource is ClaudeCode::Command\n) \n when { context has svid_active && context.svid_active == true && context has github_branch_protected && context.github_branch_protected == true && context has trust_score && context.trust_score > 30};"},{"id": 11,"name": "Approved Protected-Branch Edit","desc": "Allows edits on a protected branch with approver consent and trust above 40.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · File","action": "EditFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource is ClaudeCode::File\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context has oauth_email && context.jira_assignee_email == context.oauth_email && context has jira_status && context.jira_status == \"In Progress\" && context has github_branch_protected && context.github_branch_protected == true && context has approver_consent && context.approver_consent == true && context has trust_score && context.trust_score > 40};"},{"id": 12,"name": "Read Files (Active Session)","desc": "Allows reading files while the session is active.","principal": "ClaudeCode · Developer","resource": "ALL","action": "ReadFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"ReadFile\",\n    resource\n) \n when { context has access_state && context.access_state == \"Active\"};"},{"id": 13,"name": "Sensitive File Operations – AppSec","desc": "Allows edits to secret or config files only with AppSec review and an active ticket.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · File","action": "EditFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource is ClaudeCode::File\n) \n when { context has file_zone && (context.file_zone == \"secrets\" || context.file_zone == \"config\") && context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context has oauth_email && context.jira_assignee_email == context.oauth_email && context has jira_status && context.jira_status == \"In Progress\" && context has jira_appsec_review && context.jira_appsec_review == true && context has trust_score && context.trust_score > 30};"},{"id": 14,"name": "MCP Read (Active Session)","desc": "Allows MCP tool reads while the session is active.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · MCPTool","action": "MCPRead","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"MCPRead\",\n    resource is ClaudeCode::MCPTool\n) \n when { context has access_state && context.access_state == \"Active\"};"},{"id": 15,"name": "Restricted Project Write Operations","desc": "Blocks writes to reva-auth-service from non-SSH connections.","principal": "ALL","resource": "ClaudeCode · File","action": "WriteFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"WriteFile\",\n    resource is ClaudeCode::File\n) \n when { context has project_name && context.project_name == \"reva-auth-service\" && context has connection_type && context.connection_type != \"ssh\"};"},{"id": 16,"name": "Block Subagent File Writes","desc": "Spawned subagents cannot write files.","principal": "ALL","resource": "ALL","action": "WriteFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"WriteFile\",\n    resource\n) \n when { context has agent_type && context.agent_type == \"subagent\"};"},{"id": 17,"name": "Read Access — Unrestricted","desc": "Allows developers to read files.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · File","action": "ReadFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"ReadFile\",\n    resource is ClaudeCode::File\n);"},{"id": 18,"name": "Sensitive MCP Operations","desc": "Allows MCP writes with an active ticket, trust above 30, and low injection risk.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · MCPTool","action": "MCPWrite","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"MCPWrite\",\n    resource is ClaudeCode::MCPTool\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has trust_score && context.trust_score > 30 && context has injection_score && context.injection_score < 30};"},{"id": 19,"name": "Shell Commands – Intent Match","desc": "Allows commands on an unprotected branch with an assigned in-progress ticket and high trust.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · Command","action": "RunBash","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"RunBash\",\n    resource is ClaudeCode::Command\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context has oauth_email && context.jira_assignee_email == context.oauth_email && context has jira_status && context.jira_status == \"In Progress\" && context has github_branch_protected && context.github_branch_protected == false && context has trust_score && context.trust_score > 40 && context has escalation_score && context.escalation_score < 30};"},{"id": 20,"name": "Agent Spawn Grant","desc": "Allows spawning subagents when trust exceeds 30.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · Session","action": "SpawnAgent","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"SpawnAgent\",\n    resource is ClaudeCode::Session\n) \n when { context has trust_score && context.trust_score > 30};"},{"id": 21,"name": "Intent-Matched File Write","desc": "Allows writes on an unprotected branch with an assigned in-progress ticket and sufficient trust.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · File","action": "WriteFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"WriteFile\",\n    resource is ClaudeCode::File\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context has oauth_email && context.jira_assignee_email == context.oauth_email && context has jira_status && context.jira_status == \"In Progress\" && context has github_branch_protected && context.github_branch_protected == false && context has trust_score && context.trust_score > 30};"},{"id": 22,"name": "Auth-Service SSH-Only Edit","desc": "Blocks edits to reva-auth-service from non-SSH connections.","principal": "ALL","resource": "ClaudeCode · File","action": "EditFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource is ClaudeCode::File\n) \n when { context has project_name && context.project_name == \"reva-auth-service\" && context has connection_type && context.connection_type != \"ssh\"};"},{"id": 23,"name": "Require Linked Ticket","desc": "Blocks edits when no Jira ticket is linked.","principal": "ALL","resource": "ALL","action": "EditFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == false};"},{"id": 24,"name": "Detect Intent Drift","desc": "Blocks command execution when intent drift is detected.","principal": "ALL","resource": "ALL","action": "RunBash","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"RunBash\",\n    resource\n) \n when { context has is_intent_drift && context.is_intent_drift == true};"},{"id": 25,"name": "PM Safe Command Access","desc": "Allows product management to run safe commands while active.","principal": "ClaudeCode · Department","resource": "ClaudeCode · Command","action": "RunBash","access": "Permit","code": "permit (\n    principal in ClaudeCode::Department::\"productmanagement\",\n    action == ClaudeCode::Action::\"RunBash\",\n    resource is ClaudeCode::Command\n) \nwhen\n{\n  resource has command_risk &&\n  resource.command_risk == \"safe\" &&\n  context has access_state &&\n  context.access_state == \"Active\"\n};"},{"id": 26,"name": "Auth-Service SSH-Only Command","desc": "Blocks commands in reva-auth-service from non-SSH connections.","principal": "ALL","resource": "ClaudeCode · Command","action": "RunBash","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"RunBash\",\n    resource is ClaudeCode::Command\n) \n when { context has project_name && context.project_name == \"reva-auth-service\" && context has connection_type && context.connection_type != \"ssh\"};"},{"id": 27,"name": "Governed MCP Execute","desc": "Allows MCP execution with high trust, low injection risk, and approver consent.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · MCPTool","action": "MCPExecute","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"MCPExecute\",\n    resource is ClaudeCode::MCPTool\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has trust_score && context.trust_score > 40 && context has injection_score && context.injection_score < 20 && context has approver_consent && context.approver_consent == true};"},{"id": 28,"name": "Baseline Safety Floor – Injection","desc": "Blocks all actions when the injection score is 50 or higher.","principal": "ALL","resource": "ALL","action": "ALL","access": "Forbid","code": "forbid (\n    principal,\n    action,\n    resource\n) \n when { context has injection_score && context.injection_score >= 50};"},{"id": 29,"name": "Baseline Safety Floor – Trust","desc": "Blocks all actions when trust falls below 15.","principal": "ALL","resource": "ALL","action": "ALL","access": "Forbid","code": "forbid (\n    principal,\n    action,\n    resource\n) \n when { context has trust_score && context.trust_score < 15};"},{"id": 30,"name": "Block Jailbreak Prompts","desc": "Blocks prompt submission when jailbreak content is detected.","principal": "ALL","resource": "ALL","action": "SubmitPrompt","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"SubmitPrompt\",\n    resource\n) \n when { context has is_jailbreak && context.is_jailbreak};"},{"id": 31,"name": "Approved Protected-Branch Edit (Trust 30)","desc": "Allows edits on a protected branch with approver consent and trust above 30.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · File","action": "EditFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource is ClaudeCode::File\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context has oauth_email && context.jira_assignee_email == context.oauth_email && context has jira_status && context.jira_status == \"In Progress\" && context has github_branch_protected && context.github_branch_protected == true && context has approver_consent && context.approver_consent == true && context has trust_score && context.trust_score > 30};"},{"id": 32,"name": "Unprotected-Branch Edit (Trust 40)","desc": "Allows edits on an unprotected branch with an assigned in-progress ticket and trust above 40.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · File","action": "EditFile","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource is ClaudeCode::File\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context has oauth_email && context.jira_assignee_email == context.oauth_email && context has jira_status && context.jira_status == \"In Progress\" && context has github_branch_protected && context.github_branch_protected == false && context has trust_score && context.trust_score > 40};"},{"id": 33,"name": "MCP Write — Atlassian Rovo","desc": "Allows MCP writes to Atlassian Rovo with approver consent while active.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · MCPTool","action": "MCPWrite","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"MCPWrite\",\n    resource is ClaudeCode::MCPTool\n) \n when { context has server_name && context.server_name == \"claude_ai_Atlassian_Rovo\" && context has approver_consent && context.approver_consent == true && context has access_state && context.access_state == \"Active\"};"},{"id": 34,"name": "Assignee Identity Match","desc": "Blocks edits when the Jira assignee email does not match the authenticated user.","principal": "ALL","resource": "ALL","action": "EditFile","access": "Forbid","code": "forbid (\n    principal,\n    action == ClaudeCode::Action::\"EditFile\",\n    resource\n) \n when { context has jira_ticket_exists && context.jira_ticket_exists == true && context has jira_assignee_email && context.jira_assignee_email != \"\" && context has oauth_email && context.oauth_email != \"\" && context.jira_assignee_email != context.oauth_email};"},{"id": 35,"name": "PM MCP Write — Atlassian Rovo","desc": "Allows product managers to write to Atlassian Rovo with approver consent while active.","principal": "ClaudeCode · Department","resource": "ALL","action": "MCPWrite","access": "Permit","code": "permit (\n    principal in ClaudeCode::Department::\"productmanagement\",\n    action == ClaudeCode::Action::\"MCPWrite\",\n    resource in ClaudeCode::MCPServer::\"claude_ai_Atlassian_Rovo\"\n) \nwhen\n{\n  principal has user_role &&\n  principal.user_role == \"product_manager\" &&\n  context.approver_consent == true &&\n  context.access_state == \"Active\"\n};"},{"id": 36,"name": "Run Safe Bash Commands","desc": "Allows developers to run safe commands while the session is active.","principal": "ClaudeCode · Developer","resource": "ClaudeCode · Command","action": "RunBash","access": "Permit","code": "permit (\n    principal is ClaudeCode::Developer,\n    action == ClaudeCode::Action::\"RunBash\",\n    resource is ClaudeCode::Command\n) \n when { context has command_risk && context.command_risk == \"safe\" && context has access_state && context.access_state == \"Active\"};"}];
+/* ============================================================= */
+/* ===============  PIVOT: Policies / DecisionLogs / Intent  ==== */
+/* ============================================================= */
+const { useState: poUseState, useMemo: dlUseMemo } = React;
+
+/* ---------- Cedar syntax highlight ---------- */
+function poHighlight(code) {
+  const re = /(\/\/[^\n]*)|("(?:[^"\\]|\\.)*")|\b(permit|forbid|when|unless|principal|action|resource|is|has|in|like|true|false|context)\b|\b(\d+)\b|(==|!=|>=|<=|&&|\|\||>|<)/g;
+  return code.split("\n").map((line, li) => {
+    const parts = []; let last = 0, m; re.lastIndex = 0;
+    while ((m = re.exec(line))) {
+      if (m.index > last) parts.push({ c: "var(--ink-2)", v: line.slice(last, m.index) });
+      if (m[1]) parts.push({ c: "var(--ink-4)", v: m[1] });
+      else if (m[2]) parts.push({ c: "#15803D", v: m[2] });
+      else if (m[3]) parts.push({ c: "var(--blue)", v: m[3], b: 1 });
+      else if (m[4]) parts.push({ c: "var(--purple)", v: m[4] });
+      else if (m[5]) parts.push({ c: "var(--teal)", v: m[5] });
+      last = re.lastIndex;
+    }
+    if (last < line.length) parts.push({ c: "var(--ink-2)", v: line.slice(last) });
+    return (
+      <div key={li} style={{ display: "flex", minHeight: 22 }}>
+        <span style={{ width: 40, flex: "none", textAlign: "right", paddingRight: 14, color: "var(--ink-4)", userSelect: "none" }}>{li + 1}</span>
+        <span style={{ flex: 1, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {parts.map((p, i) => <span key={i} style={{ color: p.c, fontWeight: p.b ? 600 : 400 }}>{p.v}</span>)}
+        </span>
+      </div>
+    );
+  });
+}
+
+const PO_ACTION_TONE = { ReadFile: "#3258d6", RunBash: "#7c3aed", EditFile: "#0d9488", WriteFile: "#b45309", MCPWrite: "#c026d3" };
+function PoActionChip({ action }) {
+  return <span className="mono" style={{ display: "inline-flex", fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 6, background: "var(--surface-3)", color: PO_ACTION_TONE[action] || "var(--ink-3)" }}>{action}</span>;
+}
+function PoPrincipalCell({ p }) {
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-2)", lineHeight: 1.6 }}>
+        <span style={{ whiteSpace: "nowrap" }}>{p.principal}</span>
+        <span style={{ color: "var(--ink-4)", margin: "0 7px" }}>→</span>
+        <span style={{ whiteSpace: "nowrap" }}>{p.resource}</span>
+      </div>
+      <div style={{ marginTop: 7 }}><PoActionChip action={p.action} /></div>
+    </div>
+  );
+}
+const PO_UPDATED = "3 Jun 2026, 15:11";
+function PoTBtn({ name, active, onClick, title }) {
+  return <button className="kebab" title={title} onClick={onClick} style={{ width: 34, height: 34, color: active ? "var(--red)" : "var(--ink-4)" }}><Icon name={name} size={18} /></button>;
+}
+function PoMiniToast({ msg }) {
+  if (!msg) return null;
+  return <div className="toast-host"><div className="toast"><Icon name="checkCircle" size={16} color="#5eead4" />{msg}</div></div>;
+}
+const PO_BLANK = "permit (\n    principal,\n    action,\n    resource\n)\nwhen {\n    \n};";
+
+function PoEditor({ policy, onBack, onDelete }) {
+  const isNew = !policy;
+  const [draft, setDraft] = poUseState(isNew ? PO_BLANK : policy.code);
+  return (
+    <div className="card" style={{ overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "18px 22px", borderBottom: "1px solid var(--border)", background: "var(--surface-2)" }}>
+        <button className="kebab" onClick={onBack} style={{ marginTop: 2 }}><Icon name="arrowLeft" size={18} /></button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>{isNew ? "New policy" : policy.name}</span>
+            <Icon name="sparkles" size={16} color="var(--purple)" />
+          </div>
+          <div className="help" style={{ marginTop: 3 }}>{isNew ? "Write a Cedar policy below, then publish." : policy.desc}</div>
+        </div>
+        {!isNew && <button className="kebab" onClick={onDelete}><Icon name="trash" size={17} color="var(--ink-4)" /></button>}
+      </div>
+      <div style={{ padding: 22 }}>
+        {isNew ? (
+          <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "#fff", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: "22px" }}>
+            <div style={{ width: 40, flex: "none", background: "var(--surface-2)", borderRight: "1px solid var(--border)", padding: "14px 0", textAlign: "right" }}>
+              {draft.split("\n").map((_, i) => <div key={i} style={{ paddingRight: 12, color: "var(--ink-4)" }}>{i + 1}</div>)}
+            </div>
+            <textarea value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false}
+              style={{ flex: 1, border: 0, outline: 0, resize: "vertical", minHeight: 240, padding: "14px 16px", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: "22px", color: "var(--ink-2)", background: "#fff" }} />
+          </div>
+        ) : (
+          <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "#fff" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderBottom: "1px solid var(--border)", background: "var(--surface-2)" }}>
+              <Icon name="fileCode" size={14} color="var(--ink-4)" />
+              <span className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)" }}>policy.cedar</span>
+              <span className="pill pill-gray" style={{ marginLeft: "auto", height: 20, fontSize: 10.5 }}>Cedar</span>
+            </div>
+            <div style={{ padding: "14px 16px", fontFamily: "var(--mono)", fontSize: 12.5, lineHeight: "22px" }}>{poHighlight(draft)}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PoPager({ page, pages, total, onPage }) {
+  if (pages <= 1) return <div className="tbl-foot">{total} policies</div>;
+  return (
+    <div className="tbl-foot" style={{ display: "flex", alignItems: "center" }}>
+      <span>{total} policies</span>
+      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+        <button className="kebab" onClick={() => onPage(page - 1)} disabled={page === 0} style={{ width: 30, height: 30, opacity: page === 0 ? 0.4 : 1 }}><Icon name="arrowLeft" size={15} /></button>
+        <span className="help">Page {page + 1} of {pages}</span>
+        <button className="kebab" onClick={() => onPage(page + 1)} disabled={page >= pages - 1} style={{ width: 30, height: 30, opacity: page >= pages - 1 ? 0.4 : 1 }}><Icon name="arrowRight" size={15} /></button>
+      </div>
+    </div>
+  );
+}
+
+function PoTable({ rows, startIndex, numbered, editable, onRowClick, onDelete }) {
+  return (
+    <table className="tbl">
+      <thead>
+        <tr>
+          {numbered && <th style={{ width: 44 }}></th>}
+          <th style={{ width: 220 }}>Name</th>
+          <th>Description</th>
+          <th style={{ width: 300 }}>Principal → Resource [Action]</th>
+          <th style={{ width: 100 }}>Access</th>
+          <th style={{ width: 140 }}>Last Updated</th>
+          {editable && <th style={{ width: 48 }}></th>}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((p, i) => (
+          <tr key={p.id} className={onRowClick ? "clickable" : ""} onClick={onRowClick ? () => onRowClick(p) : undefined}>
+            {numbered && <td><span style={{ display: "grid", placeItems: "center", width: 26, height: 26, borderRadius: "50%", background: "var(--surface-3)", color: "var(--ink-3)", fontSize: 11.5, fontWeight: 700 }}>{(startIndex || 0) + i + 1}</span></td>}
+            <td><span style={{ fontWeight: 600, color: "var(--ink)", fontSize: 13.5 }}>{p.name}</span></td>
+            <td className="sub" style={{ fontSize: 12.5, maxWidth: 280 }}><span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.desc}</span></td>
+            <td><PoPrincipalCell p={p} /></td>
+            <td><Pill tone={p.access === "Permit" ? "green" : "red"}>{p.access}</Pill></td>
+            <td className="sub mono" style={{ fontSize: 12 }}>{PO_UPDATED}</td>
+            {editable && <td className="right"><button className="kebab" onClick={(e) => { e.stopPropagation(); onDelete(p.id); }}><Icon name="trash" size={16} color="var(--ink-4)" /></button></td>}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function PoEditModal({ selected, onSelect, onClose, onCreateDraft, onEdit }) {
+  return (
+    <div className="cf-scrim" onClick={onClose}>
+      <div className="cf-box" style={{ width: 460 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 600, color: "var(--ink)" }}>Edit Policy</h3>
+          <Icon name="info" size={15} color="var(--ink-4)" />
+          <button className="kebab" style={{ marginLeft: "auto", border: "1px solid var(--border-strong)" }} onClick={onClose}><Icon name="x" size={17} /></button>
+        </div>
+        <p className="help" style={{ margin: "0 0 16px" }}>Select to edit an existing draft or create a new one.</p>
+        <button onClick={() => onSelect("draft1")} style={{ width: "100%", display: "flex", alignItems: "flex-start", gap: 11, padding: "14px 16px", textAlign: "left", borderRadius: 12, cursor: "pointer", background: selected === "draft1" ? "var(--blue-tint)" : "#fff", border: "1.5px solid " + (selected === "draft1" ? "var(--blue)" : "var(--border-strong)") }}>
+          <span style={{ width: 18, height: 18, borderRadius: "50%", marginTop: 1, flex: "none", display: "grid", placeItems: "center", border: "2px solid " + (selected === "draft1" ? "var(--blue)" : "var(--border-strong)") }}>
+            {selected === "draft1" && <span style={{ width: 9, height: 9, borderRadius: "50%", background: "var(--blue)" }} />}
+          </span>
+          <span>
+            <span style={{ display: "block", fontSize: 13.5, fontWeight: 700, color: "var(--ink)" }}>Draft 1</span>
+            <span className="help" style={{ fontSize: 12 }}>Created by Patrick Fuller on 28 May, 26 · 21:02</span>
+          </span>
+        </button>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+          <button className="btn btn-ghost" onClick={onCreateDraft}>Create New Draft</button>
+          <button className="btn btn-primary" disabled={!selected} style={!selected ? { opacity: .5, cursor: "not-allowed" } : null} onClick={onEdit}>Edit</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PO_PER = 10;
+function PoliciesTab() {
+  const [mode, setMode] = poUseState("view");
+  const [showModal, setShowModal] = poUseState(false);
+  const [selectedDraft, setSelectedDraft] = poUseState(null);
+  const [editingPolicy, setEditingPolicy] = poUseState(undefined);
+  const [policies, setPolicies] = poUseState(PO_DATA);
+  const [page, setPage] = poUseState(0);
+  const [toast, setToast] = poUseState(null);
+  const fireToast = (m) => { setToast(m); setTimeout(() => setToast(null), 2600); };
+
+  const pages = Math.max(1, Math.ceil(policies.length / PO_PER));
+  const pg = Math.min(page, pages - 1);
+  const rows = policies.slice(pg * PO_PER, pg * PO_PER + PO_PER);
+  const goEditor = (p) => { setEditingPolicy(p); setMode("editor"); };
+  const publish = () => { setMode("view"); setEditingPolicy(undefined); fireToast("Draft published — policies are now live"); };
+  const removePolicy = (id) => setPolicies((ps) => ps.filter((p) => p.id !== id));
+
+  if (mode === "editor") {
+    return (
+      <div style={{ padding: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 16 }}>
+          <span className="pill pill-amber">Draft 1 · unpublished</span>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4 }}>
+            <PoTBtn name="filter" title="Filter" /><PoTBtn name="flag" active title="Flags" /><PoTBtn name="download" title="Export" /><PoTBtn name="columns" title="Columns" /><PoTBtn name="sitemap" title="Graph view" />
+            <button className="btn btn-primary btn-sm" style={{ marginLeft: 6 }} onClick={publish}>Publish</button>
+            <button className="kebab" style={{ border: "1px solid var(--border-strong)" }} onClick={() => setMode("edit")}><Icon name="x" size={18} /></button>
+          </div>
+        </div>
+        <PoEditor policy={editingPolicy} onBack={() => setMode("edit")}
+          onDelete={() => { if (editingPolicy) removePolicy(editingPolicy.id); setMode("edit"); fireToast("Policy deleted from draft"); }} />
+        <PoMiniToast msg={toast} />
+      </div>
+    );
+  }
+
+  const editing = mode === "edit";
+  return (
+    <div style={{ padding: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+        {editing ? <span className="pill pill-amber">Editing · Draft 1</span> : <span className="help">{policies.length} policies · published</span>}
+        {editing && <span className="help" style={{ marginLeft: 4 }}>click a row to open the editor</span>}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4 }}>
+          <PoTBtn name="filter" title="Filter" /><PoTBtn name="download" title="Export" /><PoTBtn name="flag" active={editing} title="Flags" /><PoTBtn name="columns" title="Columns" /><PoTBtn name="sitemap" title="Graph view" />
+          {editing ? (
+            <>
+              <button className="btn btn-ghost btn-sm" style={{ marginLeft: 6, color: "var(--blue)", borderColor: "rgba(37,99,235,.4)" }} onClick={() => goEditor(null)}><Icon name="plus" size={15} /> Policy</button>
+              <button className="btn btn-primary btn-sm" onClick={publish}>Publish</button>
+              <button className="kebab" style={{ border: "1px solid var(--border-strong)" }} onClick={() => setMode("view")}><Icon name="x" size={18} /></button>
+            </>
+          ) : (
+            <button className="btn btn-primary btn-sm" style={{ marginLeft: 6 }} onClick={() => { setShowModal(true); setSelectedDraft("draft1"); }}>Edit</button>
+          )}
+        </div>
+      </div>
+      <div className="card" style={{ overflow: "hidden" }}>
+        <PoTable rows={rows} startIndex={pg * PO_PER} numbered editable={editing} onRowClick={editing ? goEditor : null} onDelete={removePolicy} />
+        <PoPager page={pg} pages={pages} total={policies.length} onPage={setPage} />
+      </div>
+      {showModal && (
+        <PoEditModal selected={selectedDraft} onSelect={setSelectedDraft}
+          onClose={() => setShowModal(false)}
+          onCreateDraft={() => { setShowModal(false); setMode("edit"); fireToast("New draft created"); }}
+          onEdit={() => { setShowModal(false); setMode("edit"); }} />
+      )}
+      <PoMiniToast msg={toast} />
+    </div>
+  );
+}
+window.PoliciesTab = PoliciesTab;
+
+/* ===================== DECISION LOGS (real data) ===================== */
+function dlIsReal(email) {
+  if (!email) return false;
+  const e = String(email).toLowerCase().trim();
+  if (!e || e === "unknown" || e === "developer" || e === "$user") return false;
+  if (e.includes("$") || e.includes("hook") || e === "*") return false;
+  return true;
+}
+const DL_DEC_TONE = { Deny: "red", Allow: "green" };
+
+function dlMap(d, i) {
+  const email = d.user_email || d.oauth_email || "";
+  const u = email.includes("@") ? email.split("@")[0] : email;
+  const isAgent = d.agent_type === "subagent";
+  const agentId = d.agent_id || "";
+  const principal = isAgent ? (u + (agentId ? ":" + agentId : "")) : u;
+  const decision = d.effect === "Permit" ? "Allow" : "Deny";
+  const tnum = d.timestamp ? new Date(d.timestamp) : null;
+  const resource = String(d.prompt || d.file_path || d.command || d.target || d.command_risk || d.reason || "—");
+  const sc = d.scores || {};
+  const drift = sc.intent_drift_score != null ? sc.intent_drift_score : (sc.intent_mismatch_score || 0);
+  const hasIntent = !!(d.declared_scope || d.initial_scope || drift > 0);
+  return {
+    id: i, time: tnum ? tnum.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", " |") : "—",
+    principal: principal || "—", principalType: isAgent ? "Agent" : "Developer",
+    action: d.tool || "—",
+    resource, resourceKind: d.resource_kind || (d.tool === "ReadFile" || d.tool === "EditFile" || d.tool === "WriteFile" ? "File" : d.tool === "RunBash" ? "Command" : d.tool === "SubmitPrompt" ? "Prompt" : "—"),
+    decision,
+    decisionId: d.decision_id || "—",
+    traceId: d.trace_id || ("trc-" + String(d.session_id || "").replace(/[^a-z0-9]/gi, "").slice(0, 24) || "—"),
+    spanId: d.span_id || "—", parentSpanId: d.parent_span_id || "—",
+    policyStoreId: d.policy_store_id || "—",
+    drift, hasIntent, _d: d,
+  };
+}
+
+function DlField({ label, children, mono }) {
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 5 }}>{label}</div>
+      <div className={mono ? "mono" : ""} style={{ fontSize: 13.5, color: "var(--ink)", fontWeight: 500, wordBreak: "break-all" }}>{children}</div>
+    </div>
+  );
+}
+function DlKvRow({ k, v, last }) {
+  let color = "var(--ink-2)";
+  if (typeof v === "number") color = "var(--blue)";
+  else if (typeof v === "boolean") color = "var(--teal)";
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16, padding: "11px 0", borderBottom: last ? 0 : "1px solid var(--border)", alignItems: "center" }}>
+      <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--blue)" }}>{k}</span>
+      <span className="mono" style={{ fontSize: 12.5, color, wordBreak: "break-all" }}>{v === "" || v == null ? "—" : String(v)}</span>
+    </div>
+  );
+}
+
+function DlDetail({ log, onClose, onTraceFilter, onIntent }) {
+  const d = log._d || {};
+  const body = {
+    decision_id: log.decisionId, policy_store_id: log.policyStoreId,
+    subject: log.principalType + "::" + log.principal, action: log.action,
+    resource: log.resourceKind + "::" + (log.resource.length > 30 ? log.resource.slice(0, 30) + "…" : log.resource),
+    decision: log.decision.toLowerCase(), reason: d.reason || "", latency_ms: d.latency_ms != null ? d.latency_ms : 0, source: "pdp",
+    trace_id: log.traceId, parent_span_id: log.parentSpanId,
+  };
+  const ctx = {
+    access_state: d.access_state || (log.decision === "Allow" ? "Active" : "—"),
+    agent_id: d.agent_id || "—", agent_type: d.agent_type || "—",
+    command_risk: d.command_risk || "—", connection_type: d.connection_type || "—",
+    declared_scope: d.declared_scope || "—", initial_scope: d.initial_scope || "—",
+    file_path: d.file_path || "—", file_zone: d.file_zone || "—",
+    git_email: d.git_email || "—", github_branch_protected: d.github_branch_protected,
+    injection_score: (d.scores || {}).injection_score != null ? (d.scores || {}).injection_score : 0,
+    intent_drift_score: log.drift, intent_tier: d.intent_tier || "—",
+    trust_score: d.trust_score != null ? d.trust_score : "—",
+  };
+  const evaluated = log.decision === "Deny"
+    ? [{ name: "Cedar forbid policy matched", d: "Deny" }]
+    : [{ name: "Cedar permit policy matched", d: "Allow" }];
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
+      <div style={{ position: "relative" }}>
+        <button className="kebab" onClick={onClose} style={{ position: "absolute", top: 0, right: 0, width: 32, height: 32, borderRadius: "50%", background: "var(--blue-tint)", color: "var(--blue)" }}><Icon name="x" size={17} /></button>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "18px 40px", paddingRight: 40 }}>
+          <DlField label="Source"><Pill tone="blue">PDP</Pill></DlField>
+          <DlField label="Decision"><Pill tone={DL_DEC_TONE[log.decision]}>{log.decision}</Pill></DlField>
+          <DlField label="Decision ID" mono>{log.decisionId}</DlField>
+          <DlField label="Timestamp">{log.time}</DlField>
+          <DlField label="Principal" mono>{log.principal}</DlField>
+          <DlField label="Action">{log.action}</DlField>
+          <DlField label="Resource" mono>{log.resource.length > 40 ? log.resource.slice(0, 40) + "…" : log.resource}</DlField>
+          <DlField label="Trace ID">
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="mono" style={{ fontSize: 12.5 }}>{log.traceId}</span>
+              <button className="kebab" title="Filter with TraceID" onClick={onTraceFilter} style={{ width: 26, height: 26 }}><Icon name="filter" size={14} color="var(--blue)" /></button>
+            </div>
+            {log.hasIntent && (
+              <button onClick={onIntent} style={{ marginTop: 10, display: "inline-flex", alignItems: "center", gap: 7, height: 32, padding: "0 12px", borderRadius: 8, border: "1px solid rgba(234,88,12,.3)", background: "var(--coral-tint)", color: "var(--coral-ink)", fontSize: 12.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                <Icon name="flame" size={14} color="var(--coral)" /> View Intent Profile <Icon name="arrowRight" size={13} />
+              </button>
+            )}
+          </DlField>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 26 }}>
+        <div className="section-title" style={{ fontSize: 16, marginBottom: 12 }}>Evaluated Policies</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {evaluated.map((p, i) => (
+            <div key={i} className="card" style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>
+              <div style={{ marginLeft: "auto" }}><Pill tone={DL_DEC_TONE[p.d]}>{p.d}</Pill></div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 22, padding: 18, borderLeft: "3px solid var(--blue)" }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)", marginBottom: 14 }}>Decision Context</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "14px 24px" }}>
+          <DlField label="Trace ID" mono>{log.traceId}</DlField>
+          <DlField label="Span ID" mono>{log.spanId}</DlField>
+          <DlField label="Parent Span ID" mono>{log.parentSpanId}</DlField>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16, padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>Body</span>
+          <span className="pill pill-blue" style={{ marginLeft: "auto", height: 22 }}>{Object.keys(body).length}</span>
+        </div>
+        <div>{Object.entries(body).map(([k, v], i, a) => <DlKvRow key={k} k={k} v={v} last={i === a.length - 1} />)}</div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16, padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 12 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--blue)" }}>context</span>
+          <span className="pill pill-amber" style={{ height: 20, fontSize: 10.5 }}>JSON</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+          {Object.entries(ctx).map(([k, v]) => {
+            let color = "var(--ink-2)";
+            if (typeof v === "number") color = "var(--blue)";
+            else if (typeof v === "boolean") color = "var(--teal)";
+            return (
+              <div key={k} style={{ display: "flex", gap: 8, fontSize: 12.5 }}>
+                <span style={{ fontWeight: 600, color: "var(--blue)", whiteSpace: "nowrap" }}>{k}:</span>
+                <span className="mono" style={{ color, wordBreak: "break-all" }}>{v == null ? "—" : String(v)}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DlRailCard({ log, active, onClick }) {
+  const ok = log.decision === "Allow";
+  return (
+    <button onClick={onClick} style={{ width: "100%", textAlign: "left", padding: "12px 14px", borderRadius: 12, cursor: "pointer", marginBottom: 10, background: active ? "var(--blue-tint)" : "#fff", border: "1.5px solid " + (active ? "var(--blue)" : "var(--border)") }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 84 }}>{log.principal.split(":")[0]}</span>
+        <Icon name="arrowRight" size={12} color="var(--ink-4)" />
+        <span className="mono" style={{ fontSize: 12, color: "var(--ink-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{log.resource.length > 16 ? log.resource.slice(0, 16) + "…" : log.resource}</span>
+        <span className="pill pill-gray" style={{ height: 22, fontSize: 11, fontFamily: "var(--mono)" }}>{log.action}</span>
+        <span style={{ width: 18, height: 18, borderRadius: "50%", flex: "none", display: "grid", placeItems: "center", background: ok ? "var(--green)" : "var(--red)" }}><Icon name={ok ? "check" : "x"} size={11} color="#fff" /></span>
+      </div>
+      <div className="help" style={{ fontSize: 11.5, marginTop: 6 }}>{log.time}</div>
+    </button>
+  );
+}
+
+function DlReplaceModal({ onCancel, onConfirm }) {
+  return (
+    <div className="cf-scrim" onClick={onCancel}>
+      <div className="cf-box" style={{ width: 420 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
+          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 600, color: "var(--ink)" }}>Replace filters?</h3>
+          <button className="kebab" style={{ marginLeft: "auto", border: "1px solid var(--border-strong)" }} onClick={onCancel}><Icon name="x" size={17} /></button>
+        </div>
+        <p className="sub" style={{ margin: "0 0 20px", fontSize: 13.5 }}>This will clear all current filters and apply the Trace ID filter instead.</p>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-primary" onClick={onConfirm}>Replace Filters</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DecisionLogsV2() {
+  const reva = useReva();
+  const raw = (reva.raw && reva.raw.decisions) || [];
+  const LOGS = dlUseMemo(() => raw.filter((d) => dlIsReal(d.user_email || d.oauth_email)).map((d, i) => dlMap(d, i)), [raw]);
+  const [openId, setOpenId] = React.useState(null);
+  const [traceFilter, setTraceFilter] = React.useState(null);
+  const [confirmTrace, setConfirmTrace] = React.useState(null);
+  const [intentLog, setIntentLog] = React.useState(null);
+  const [q, setQ] = React.useState("");
+
+  const visible = dlUseMemo(() => {
+    let v = LOGS;
+    if (traceFilter) v = v.filter((l) => l.traceId === traceFilter);
+    if (q) { const s = q.toLowerCase(); v = v.filter((l) => (l.principal + l.action + l.resource + l.traceId).toLowerCase().includes(s)); }
+    return v;
+  }, [LOGS, traceFilter, q]);
+  const openLog = openId != null ? LOGS.find((l) => l.id === openId) : null;
+
+  if (intentLog) return <window.IntentProfile log={intentLog} onBack={() => setIntentLog(null)} />;
+
+  return (
+    <div style={{ padding: "24px 28px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
+        <div className="search" style={{ flex: 1, minWidth: 0, height: 44, borderRadius: 999 }}>
+          {traceFilter && (
+            <span className="pill pill-blue" style={{ height: 28, flex: "none" }}>
+              Trace ID is {traceFilter.slice(0, 22)}…
+              <button onClick={() => setTraceFilter(null)} style={{ border: 0, background: "transparent", padding: 0, marginLeft: 4, display: "grid", placeItems: "center", color: "var(--blue-700)", cursor: "pointer" }}><Icon name="x" size={13} /></button>
+            </span>
+          )}
+          <input placeholder="Filter by principal, action, resource…" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1 }} />
+          <Icon name="search" size={17} color="var(--ink-4)" />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button className="kebab" title="Export"><Icon name="download" size={18} /></button>
+          <button className="kebab" title="Date range"><Icon name="calendar" size={18} /></button>
+          <button className="kebab" title="Refresh"><Icon name="rotate" size={18} /></button>
+        </div>
+      </div>
+
+      {openLog ? (
+        <div style={{ display: "flex", gap: 16, minHeight: 0 }}>
+          <div style={{ width: 360, flex: "none", maxHeight: "calc(100vh - 240px)", overflowY: "auto", paddingRight: 4 }}>
+            {visible.map((l) => <DlRailCard key={l.id} log={l} active={l.id === openId} onClick={() => setOpenId(l.id)} />)}
+          </div>
+          <div className="card" style={{ flex: 1, minWidth: 0, display: "flex", overflow: "hidden", maxHeight: "calc(100vh - 240px)" }}>
+            <DlDetail log={openLog} onClose={() => setOpenId(null)}
+              onTraceFilter={() => setConfirmTrace(openLog.traceId)}
+              onIntent={() => setIntentLog(openLog)} />
+          </div>
+        </div>
+      ) : (
+        <div className="card" style={{ overflow: "hidden" }}>
+          <table className="tbl" style={{ tableLayout: "fixed", width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={{ width: 170 }}>Timestamp</th>
+                <th style={{ width: 260 }}>Principal</th>
+                <th style={{ width: 150 }}>Action</th>
+                <th>Resource</th>
+                <th style={{ width: 110, textAlign: "right" }}>Decision</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((l) => (
+                <tr key={l.id} className="clickable" onClick={() => setOpenId(l.id)}>
+                  <td className="sub" style={{ fontSize: 12.5 }}>{l.time}</td>
+                  <td>
+                    <div className="mono" style={{ fontSize: 12.5, color: "var(--ink)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.principal}</div>
+                    <div className="help" style={{ fontSize: 11.5, marginTop: 2 }}>{l.principalType}</div>
+                  </td>
+                  <td><span className="pill pill-gray" style={{ fontFamily: "var(--mono)", fontWeight: 600 }}>{l.action}</span></td>
+                  <td>
+                    <div className="mono" style={{ fontSize: 12.5, color: "var(--ink-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.resource}</div>
+                    <div className="help" style={{ fontSize: 11.5, marginTop: 2 }}>{l.resourceKind}</div>
+                  </td>
+                  <td style={{ textAlign: "right" }}><Pill tone={DL_DEC_TONE[l.decision]}>{l.decision}</Pill></td>
+                </tr>
+              ))}
+              {visible.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-4)", padding: 36 }}>No decisions yet.</td></tr>}
+            </tbody>
+          </table>
+          {visible.length > 0 && <div className="tbl-foot">Showing {visible.length} decision{visible.length === 1 ? "" : "s"}</div>}
+        </div>
+      )}
+
+      {confirmTrace && <DlReplaceModal onCancel={() => setConfirmTrace(null)} onConfirm={() => { setTraceFilter(confirmTrace); setConfirmTrace(null); setOpenId(null); }} />}
+    </div>
+  );
+}
+window.DecisionLogs = DecisionLogsV2;
+
+/* ===================== INTENT PROFILE (coding scenario) ===================== */
+const IP_SEV_TONE = { Low: "green", Medium: "amber", High: "coral", Critical: "red" };
+function IpSevBadge({ level }) {
+  return <span className={"pill pill-" + (IP_SEV_TONE[level] || "gray")} style={{ gap: 5 }}><Icon name="bars" size={11} /> {level}</span>;
+}
+function ipSev(v) { return v >= 0.85 ? "Critical" : v >= 0.6 ? "High" : v >= 0.4 ? "Medium" : "Low"; }
+function ipClamp(v) { return Math.max(0, Math.min(1, v)); }
+
+function ipCompute(d) {
+  d = d || {};
+  const sc = d.scores || {};
+  const oauth = d.oauth_email || d.user_email || "";
+  const git = d.git_email || "";
+  const assignee = d.jira_assignee_email || "";
+  const action = d.tool || "—";
+  const tier = d.intent_tier || "read";
+  const cr = d.command_risk || "";
+  const declared = d.declared_scope || d.initial_scope || "Review the docs directory";
+  const filePath = d.file_path || d.target || d.prompt || "";
+
+  // Actor — identity integrity
+  const idMismatch = (!!git && !!oauth && git !== oauth) || (!!assignee && !!oauth && assignee !== oauth);
+  const actor = idMismatch ? 0.9 : 0.12;
+  // Target — declared folder vs actual file
+  let target = 0.2;
+  const folder = (declared.match(/([\w./-]+\/)/) || [])[1] || (/docs/i.test(declared) ? "docs" : "");
+  if (filePath && folder && !String(filePath).toLowerCase().includes(folder.toLowerCase().replace(/\/$/, ""))) target = 0.88;
+  // Value — command/operation risk
+  const value = cr === "destructive" ? 0.9 : cr === "restricted" ? 0.55 : (action === "EditFile" || action === "WriteFile") ? 0.6 : 0.2;
+  // Action — declared tier (read) vs actual action
+  const mutating = ["EditFile", "WriteFile", "RunBash", "MCPWrite", "DelegateScope", "SpawnAgent"].includes(action);
+  const actionV = (tier === "read" && mutating) ? 0.62 : mutating ? 0.4 : 0.15;
+  // Scope — declared task boundary vs current
+  const driftRaw = sc.intent_drift_score != null ? sc.intent_drift_score : (sc.intent_mismatch_score || 0);
+  const scope = ipClamp(driftRaw / 100) || (target > 0.5 ? 0.5 : 0.25);
+
+  const axes = { Actor: actor, Target: target, Value: value, Action: actionV, Scope: scope };
+  const agg = ipClamp(driftRaw > 0 ? driftRaw / 100 : (actor + target + value + actionV + scope) / 5);
+  return { axes, agg, idMismatch, oauth, git, assignee, action, tier, cr, declared, filePath, mutating };
+}
+
+function IpRadar({ axes }) {
+  const order = ["Actor", "Target", "Value", "Action", "Scope"];
+  const size = 300, cx = size / 2, cy = size / 2 + 4, maxR = 96;
+  const pt = (i, r) => { const a = (-90 + i * 72) * Math.PI / 180; return [cx + Math.cos(a) * r * maxR, cy + Math.sin(a) * r * maxR]; };
+  const rings = [0.25, 0.5, 0.75, 1];
+  const actual = order.map((k) => axes[k]);
+  const baseline = [0.4, 0.4, 0.4, 0.4, 0.4];
+  const poly = (vals) => vals.map((v, i) => pt(i, v).join(",")).join(" ");
+  return (
+    <svg width="100%" viewBox={"0 0 " + size + " " + size} style={{ maxHeight: 300 }}>
+      {rings.map((r, i) => <polygon key={i} points={order.map((_, j) => pt(j, r).join(",")).join(" ")} fill="none" stroke="var(--border)" strokeWidth="1" />)}
+      {order.map((_, i) => { const [x, y] = pt(i, 1); return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--border)" strokeWidth="1" />; })}
+      <polygon points={poly(baseline)} fill="rgba(124,58,237,.06)" stroke="var(--purple)" strokeWidth="1.4" strokeDasharray="4 4" opacity=".7" />
+      <polygon points={poly(actual)} fill="rgba(220,38,38,.13)" stroke="var(--red)" strokeWidth="2" />
+      {actual.map((v, i) => { const [x, y] = pt(i, v); return <circle key={i} cx={x} cy={y} r="3.2" fill="var(--red)" />; })}
+      {order.map((k, i) => { const [x, y] = pt(i, 1.16); return (
+        <g key={k}>
+          <text x={x} y={y - 3} textAnchor="middle" style={{ fontSize: 11, fontWeight: 600, fill: "var(--ink-3)" }}>{k}</text>
+          <text x={x} y={y + 10} textAnchor="middle" style={{ fontSize: 11, fontWeight: 700, fill: "var(--ink)" }}>{axes[k].toFixed(2)}</text>
+        </g>); })}
+    </svg>
+  );
+}
+
+function IpScoreBar({ score }) {
+  return (
+    <div>
+      <div style={{ position: "relative", height: 12, borderRadius: 999, display: "flex" }}>
+        <span style={{ flex: 0.4, background: "var(--green)", borderRadius: "999px 0 0 999px" }} />
+        <span style={{ flex: 0.2, background: "var(--amber)" }} />
+        <span style={{ flex: 0.4, background: "var(--red)", borderRadius: "0 999px 999px 0" }} />
+        <span style={{ position: "absolute", top: "50%", left: (score * 100) + "%", transform: "translate(-50%,-50%)", width: 18, height: 18, borderRadius: "50%", background: "#fff", border: "3px solid var(--red)", boxShadow: "0 1px 4px rgba(16,24,40,.2)" }} />
+      </div>
+      <div style={{ display: "flex", marginTop: 6, fontSize: 11.5, color: "var(--ink-3)", fontWeight: 500 }}>
+        <span style={{ flex: 0.4, textAlign: "center" }}>Aligned</span>
+        <span style={{ flex: 0.2, textAlign: "center" }}>Misaligned</span>
+        <span style={{ flex: 0.4, textAlign: "center" }}>Drifted</span>
+      </div>
+    </div>
+  );
+}
+
+function IpTransition({ from, to, drift }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>
+      <span style={{ color: "var(--blue)" }}>{from}</span>
+      <Icon name="arrowRight" size={13} color="var(--ink-4)" />
+      <span style={{ color: drift ? "var(--red)" : "var(--blue)" }}>{to}</span>
+    </div>
+  );
+}
+function IpCard({ c }) {
+  return (
+    <div className="card" style={{ padding: 18 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 12 }}>
+        <span style={{ width: 40, height: 40, borderRadius: 11, flex: "none", display: "grid", placeItems: "center", background: "var(--" + c.tint + "-tint)", color: "var(--" + c.tint + ")" }}><Icon name={c.icon} size={20} /></span>
+        <div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "var(--ink)", letterSpacing: "-.02em", lineHeight: 1 }}>{c.score.toFixed(2)}</div>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)", marginTop: 4 }}>{c.label} <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>({c.sub})</span></div>
+        </div>
+        <div style={{ marginLeft: "auto" }}><IpSevBadge level={c.sev} /></div>
+      </div>
+      <IpTransition from={c.from} to={c.to} drift={c.drift} />
+      <div style={{ fontSize: 12.5, color: "var(--ink-3)", lineHeight: 1.55 }}>{c.note}</div>
+    </div>
+  );
+}
+
+function IntentProfile({ log, onBack }) {
+  const d = (log && log._d) || {};
+  const traceId = (log && log.traceId) || "—";
+  const r = ipCompute(d);
+  const folder = (r.declared.match(/docs|tests|src|[\w-]+ directory/i) || ["the declared folder"])[0];
+  const cards = [
+    { icon: "user", tint: "blue", score: r.axes.Actor, label: "Actor", sub: "Identity", sev: ipSev(r.axes.Actor),
+      from: r.oauth || "authenticated user", to: r.idMismatch ? (r.git || r.assignee || "different identity") : (r.oauth || "authenticated user"), drift: r.idMismatch,
+      note: r.idMismatch ? "Acting identity diverged from the authenticated user — committer/assignee email does not match the OAuth identity, an Identity Integrity violation." : "Acting identity matches the authenticated developer throughout — no identity drift." },
+    { icon: "target", tint: r.axes.Target >= 0.6 ? "red" : "blue", score: r.axes.Target, label: "Target", sub: "Resource", sev: ipSev(r.axes.Target),
+      from: folder, to: r.filePath ? (String(r.filePath).slice(0, 40)) : "declared scope", drift: r.axes.Target >= 0.5,
+      note: r.axes.Target >= 0.5 ? "Accessed files outside the declared scope — reading or touching paths that were never part of the requested task." : "Resource access stayed within the declared scope." },
+    { icon: "coin", tint: r.axes.Value >= 0.6 ? "coral" : "green", score: r.axes.Value, label: "Value", sub: "Operation", sev: ipSev(r.axes.Value),
+      from: r.tier === "read" ? "read-only" : "declared operation", to: r.cr ? (r.cr + " " + r.action) : r.action, drift: r.axes.Value >= 0.5,
+      note: r.axes.Value >= 0.5 ? "Operation class escalated beyond the declared read intent — a mutating or higher-risk command class." : "Operation remained low-risk and consistent with the declared intent." },
+    { icon: "play", tint: r.axes.Action >= 0.6 ? "coral" : "green", score: r.axes.Action, label: "Action", sub: "Intent Type", sev: ipSev(r.axes.Action),
+      from: r.tier === "read" ? "review / read" : r.tier, to: r.action, drift: r.axes.Action >= 0.5,
+      note: r.axes.Action >= 0.5 ? "Action type exceeded the declared intent tier — the session declared a read/review task but performed a mutating action." : "Action type is consistent with the declared intent tier." },
+    { icon: "pin", tint: r.axes.Scope >= 0.6 ? "red" : "purple", score: r.axes.Scope, label: "Scope", sub: "Boundary", sev: ipSev(r.axes.Scope),
+      from: r.declared.slice(0, 48), to: r.axes.Scope >= 0.5 ? "drifted scope" : r.declared.slice(0, 48), drift: r.axes.Scope >= 0.5,
+      note: r.axes.Scope >= 0.5 ? "Execution drifted beyond the declared task boundary — work expanded past what the developer originally requested." : "Execution stayed within the declared task boundary." },
+  ];
+  return (
+    <div style={{ padding: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 22 }}>
+        <button className="kebab" onClick={onBack} style={{ width: 38, height: 38, border: "1px solid var(--border-strong)" }}><Icon name="arrowLeft" size={18} /></button>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 21, fontWeight: 600, letterSpacing: "-.02em", color: "var(--ink)" }}>Intent Drift Attribution</h1>
+          <div className="mono" style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 3 }}>TraceID: {traceId}</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 16, marginBottom: 16 }}>
+        <div className="card" style={{ padding: 18 }}>
+          <div className="section-title" style={{ fontSize: 15, marginBottom: 6 }}>Drift Attribution</div>
+          <IpRadar axes={r.axes} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div className="card" style={{ padding: 20 }}>
+            <div className="section-title" style={{ fontSize: 15, marginBottom: 14 }}>Intent Comparison</div>
+            <div style={{ display: "flex", alignItems: "stretch", gap: 14 }}>
+              <div style={{ flex: 1, background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--blue)", marginBottom: 6 }}>Declared Scope</div>
+                <div style={{ fontSize: 13.5, color: "var(--ink)", fontStyle: "italic" }}>"{r.declared}"</div>
+              </div>
+              <div style={{ display: "grid", placeItems: "center" }}><Icon name="arrowRight" size={20} color="var(--ink-4)" /></div>
+              <div style={{ flex: "0 0 40%", background: "var(--red-tint)", border: "1px solid #F5C2C2", borderRadius: 12, padding: "14px 16px" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--red)", marginBottom: 6 }}>Drifted Behavior</div>
+                <div style={{ fontSize: 13.5, color: "var(--coral-ink)", fontStyle: "italic" }}>"{r.action}{r.filePath ? " · " + String(r.filePath).slice(0, 34) : ""}"</div>
+              </div>
+            </div>
+          </div>
+          <div className="card" style={{ padding: 20 }}>
+            <div className="section-title" style={{ fontSize: 15, marginBottom: 14 }}>Drift Score</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <span style={{ fontSize: 38, fontWeight: 700, color: "var(--red)", letterSpacing: "-.03em", lineHeight: 1 }}>{r.agg.toFixed(2)}</span>
+              <span style={{ fontSize: 13.5, color: "var(--ink-3)", fontWeight: 500 }}>{r.agg >= 0.6 ? "High / drifted" : r.agg >= 0.4 ? "Misaligned" : "Aligned"}</span>
+              <IpSevBadge level={ipSev(r.agg)} />
+            </div>
+            <IpScoreBar score={r.agg} />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+        {cards.map((c) => <IpCard key={c.label} c={c} />)}
+      </div>
+    </div>
+  );
+}
+window.IntentProfile = IntentProfile;
+
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
