@@ -64,6 +64,11 @@ export interface DecisionLog {
   cedar_policy_name?: string;
   cedar_latency_ms?:  number;
   cedar_decision_id?: string;
+  // Exact Cedar request (what was sent to the PDP) — decision logs render this verbatim
+  cedar_action?:        string;
+  cedar_resource?:      string;
+  cedar_resource_type?: string;
+  cedar_context?:       Record<string, any>;
 }
 
 export const decisionLog: DecisionLog[] = [];

@@ -707,3 +707,16 @@ export function buildMCPToolPayload(params: {
     session_id: params.sessionId,
   };
 }
+
+// Extract the exact Cedar request fields from a built payload, so decision logs
+// can render verbatim what was sent to the PDP (action / resource / context).
+export function cedarFields(p: any): {
+  cedar_action: string; cedar_resource: string; cedar_resource_type: string; cedar_context: Record<string, any>;
+} {
+  return {
+    cedar_action:        p?.action?.name || '',
+    cedar_resource:      (p?.resource?.id != null ? String(p.resource.id) : ''),
+    cedar_resource_type: p?.resource?.type || '',
+    cedar_context:       p?.context || {},
+  };
+}

@@ -17,7 +17,7 @@ import { triggerHITL }           from '../hitl/trigger';
 import { pollHITL }              from '../hitl/poll';
 import { recordHITLApproval, recordHITLDenial } from '../hitl/callback';
 import { resolveAgentName }      from '../../api/agentResolver';
-import { evaluateCedar, buildCallToolPayload, buildFileOperationPayload, buildMCPToolPayload, getOrCreateSessionTrace, classifyCommand } from '../../api/pdpEvaluate';
+import { evaluateCedar, buildCallToolPayload, buildFileOperationPayload, buildMCPToolPayload, getOrCreateSessionTrace, classifyCommand, cedarFields } from '../../api/pdpEvaluate';
 
 // HITL user mapping — OS username → Okta email
 const HITL_MAP: Record<string, string> = {
@@ -785,6 +785,7 @@ export async function handleToolCall(req: Request, res: Response) {
       cedar_policy_name: cedarResult.policy_name,
       cedar_latency_ms:  cedarResult.latency_ms,
       cedar_decision_id: cedarResult.decision_id,
+      ...cedarFields(cedarPayload),
     });
 
     // HITL: currently disabled — Cedar deny = hard deny, no HITL trigger
@@ -824,7 +825,7 @@ export async function handleToolCall(req: Request, res: Response) {
           // CRITICAL: If Cedar STILL denies after HITL approval, enforce the deny
           if (approvedCedar.decision === 'deny') {
             console.warn(`[HITL] Cedar re-eval STILL denied after approval — enforcing deny for ${tool_name}`);
-            logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Deny', reason: 'HITL approved but Cedar denied — no matching permit policy', intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: approvedCedar.decision, cedar_policy_name: approvedCedar.policy_name, cedar_latency_ms: approvedCedar.latency_ms });
+            logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Deny', reason: 'HITL approved but Cedar denied — no matching permit policy', intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: approvedCedar.decision, cedar_policy_name: approvedCedar.policy_name, cedar_latency_ms: approvedCedar.latency_ms , ...cedarFields(cedarPayload) });
             hitlInFlight.delete(hitlKey);
             return res.json({
               hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
@@ -833,7 +834,7 @@ export async function handleToolCall(req: Request, res: Response) {
             });
           }
 
-          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Permit', reason: 'HITL approved — Cedar re-evaluated and permitted', intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: approvedCedar.decision, cedar_policy_name: approvedCedar.policy_name, cedar_latency_ms: approvedCedar.latency_ms });
+          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Permit', reason: 'HITL approved — Cedar re-evaluated and permitted', intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: approvedCedar.decision, cedar_policy_name: approvedCedar.policy_name, cedar_latency_ms: approvedCedar.latency_ms , ...cedarFields(cedarPayload) });
 
           hitlInFlight.delete(hitlKey);
           return res.json({
@@ -847,7 +848,7 @@ export async function handleToolCall(req: Request, res: Response) {
           recordHITLDenial(session_id, tool_name, user_email, denyStatus, triggerResult.poll_url);
           hitlInFlight.delete(hitlKey);
 
-          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Deny', reason: `HITL ${denyStatus} by ${resolveHITLEmail(user_email)}`, intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: cedarResult.decision, cedar_policy_name: cedarResult.policy_name, cedar_latency_ms: cedarResult.latency_ms });
+          logDecision({ timestamp: new Date().toISOString(), session_id, user_email, tool: tool_name, server: server_name, sensitivity: result.sensitivity, effect: 'Deny', reason: `HITL ${denyStatus} by ${resolveHITLEmail(user_email)}`, intent: promptIntent, trust_score: result.trust_score, scores: result.scores, prompt: query.slice(0, 200), prompt_history: promptHistory, agent_type: derivedAgentType, cedar_decision: cedarResult.decision, cedar_policy_name: cedarResult.policy_name, cedar_latency_ms: cedarResult.latency_ms , ...cedarFields(cedarPayload) });
 
           return res.json({
             hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',

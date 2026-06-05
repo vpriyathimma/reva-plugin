@@ -105,7 +105,7 @@ app.use('/api', hitlRouter);
 import { logDecision } from './connector/discovery/enroll';
 import { recordBlock, classifyPrompt, getPersistentTrust } from './api/intentClassifier';
 import { bindSpawnToAgent, extractAgentId, displayName, resolveSubagent } from './connector/hooks/beforeToolCall';
-import { evaluateCedar, buildClaudeCodeInjectionPayload } from './api/pdpEvaluate';
+import { evaluateCedar, buildClaudeCodeInjectionPayload, cedarFields } from './api/pdpEvaluate';
 import { getPIPContext } from './api/pip';
 import { sessionIntentStore } from './connector/hooks/beforePrompt';
 import { claudeSessionUserStore } from './connector/hooks/onSessionStart';
@@ -206,9 +206,9 @@ app.post('/api/pdp/hook', async (req, res) => {
         }
       } catch (e) { /* never break the scan */ }
 
-      let cedarResult;
+      let cedarResult; let injPayload: any;
       try {
-        cedarResult = await evaluateCedar(buildClaudeCodeInjectionPayload({
+        injPayload = buildClaudeCodeInjectionPayload({
           osUser:        user_email,
           projectName:   (req.body?.cwd || '').split('/').pop() || 'unknown',
           sessionId:     session_id,
@@ -226,7 +226,8 @@ app.post('/api/pdp/hook', async (req, res) => {
           initialScope:    batchInitial,
           sourcePath:      fp,
           pipCtx:          batchPip,
-        }));
+        });
+        cedarResult = await evaluateCedar(injPayload);
       } catch (e: any) {
         console.error('[FileInjection:Cedar] SubmitPrompt eval failed:', e.message);
       }
@@ -245,6 +246,7 @@ app.post('/api/pdp/hook', async (req, res) => {
         scores:       result.scores,
         prompt:       content.slice(0, 200),
         agent_type:   batchAgentKind,
+        ...cedarFields(injPayload || {}),
       });
       console.log(`[FileInjection] ${detection} in ${fp} session=${session_id} score=${result.scores.injection_score} decision=${cedarResult?.decision ?? 'error'} trust=${getPersistentTrust(user_email)}`);
     }

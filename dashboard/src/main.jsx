@@ -4175,29 +4175,34 @@ function dlIsReal(email) {
 }
 const DL_DEC_TONE = { Deny: "red", Allow: "green" };
 
+const DL_KIND = { Command: "Command", File: "File", Prompt: "Prompt", Session: "Session", MCPTool: "MCP Tool" };
 function dlMap(d, i) {
-  const email = d.user_email || d.oauth_email || "";
-  const u = email.includes("@") ? email.split("@")[0] : email;
-  const isAgent = d.agent_type === "subagent";
-  const agentId = d.agent_id || "";
-  const principal = isAgent ? (u + (agentId ? ":" + agentId : "")) : u;
+  const ctx = d.cedar_context || {};
+  const osUser = ctx.os_user || ((d.user_email || "").includes("@") ? d.user_email.split("@")[0] : (d.user_email || d.oauth_email || ""));
+  const isAgent = (ctx.agent_type || d.agent_type) === "subagent";
+  const agentId = ctx.agent_id || d.agent_id || "";
+  const principal = isAgent ? (osUser + (agentId ? ":" + agentId : "")) : osUser;
   const decision = d.effect === "Permit" ? "Allow" : "Deny";
   const tnum = d.timestamp ? new Date(d.timestamp) : null;
-  const resource = String(d.prompt || d.file_path || d.command || d.target || d.command_risk || d.reason || "—");
+  const action = d.cedar_action || d.tool || "—";
+  const rtype = d.cedar_resource_type || "";
+  const resource = String(d.cedar_resource || ctx.command || ctx.file_path || d.reason || d.prompt || "—");
   const sc = d.scores || {};
-  const drift = sc.intent_drift_score != null ? sc.intent_drift_score : (sc.intent_mismatch_score || 0);
-  const hasIntent = !!(d.declared_scope || d.initial_scope || drift > 0);
+  const drift = ctx.intent_drift_score != null ? ctx.intent_drift_score : (sc.intent_drift_score != null ? sc.intent_drift_score : (sc.intent_mismatch_score || 0));
+  const hasIntent = !!(ctx.declared_scope || ctx.initial_scope || ctx.is_intent_drift || drift > 0);
   return {
     id: i, time: tnum ? tnum.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", " |") : "—",
     principal: principal || "—", principalType: isAgent ? "Agent" : "Developer",
-    action: d.tool || "—",
-    resource, resourceKind: d.resource_kind || (d.tool === "ReadFile" || d.tool === "EditFile" || d.tool === "WriteFile" ? "File" : d.tool === "RunBash" ? "Command" : d.tool === "SubmitPrompt" ? "Prompt" : "—"),
+    action,
+    resource, resourceKind: DL_KIND[rtype] || rtype || "—",
     decision,
-    decisionId: d.decision_id || "—",
-    traceId: d.trace_id || ("trc-" + String(d.session_id || "").replace(/[^a-z0-9]/gi, "").slice(0, 24) || "—"),
-    spanId: d.span_id || "—", parentSpanId: d.parent_span_id || "—",
+    decisionId: d.cedar_decision_id || d.decision_id || "—",
+    traceId: ctx.session_trace_id || d.trace_id || ("trc-" + (String(d.session_id || "").replace(/[^a-z0-9]/gi, "").slice(0, 24) || "—")),
+    spanId: d.span_id || "—", parentSpanId: ctx.parent_session_id || d.parent_span_id || "—",
     policyStoreId: d.policy_store_id || "—",
-    drift, hasIntent, _d: d,
+    policyName: d.cedar_policy_name || "",
+    hasCedar: !!d.cedar_action,
+    drift, hasIntent, ctx, _d: d,
   };
 }
 
@@ -4216,7 +4221,7 @@ function DlKvRow({ k, v, last }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 16, padding: "11px 0", borderBottom: last ? 0 : "1px solid var(--border)", alignItems: "center" }}>
       <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--blue)" }}>{k}</span>
-      <span className="mono" style={{ fontSize: 12.5, color, wordBreak: "break-all" }}>{v === "" || v == null ? "—" : String(v)}</span>
+      <span className="mono" style={{ fontSize: 12.5, color, wordBreak: "break-all" }}>{v === "" || v == null ? "—" : (typeof v === "object" ? JSON.stringify(v) : String(v))}</span>
     </div>
   );
 }
@@ -4230,20 +4235,11 @@ function DlDetail({ log, onClose, onTraceFilter, onIntent }) {
     decision: log.decision.toLowerCase(), reason: d.reason || "", latency_ms: d.latency_ms != null ? d.latency_ms : 0, source: "pdp",
     trace_id: log.traceId, parent_span_id: log.parentSpanId,
   };
-  const ctx = {
-    access_state: d.access_state || (log.decision === "Allow" ? "Active" : "—"),
-    agent_id: d.agent_id || "—", agent_type: d.agent_type || "—",
-    command_risk: d.command_risk || "—", connection_type: d.connection_type || "—",
-    declared_scope: d.declared_scope || "—", initial_scope: d.initial_scope || "—",
-    file_path: d.file_path || "—", file_zone: d.file_zone || "—",
-    git_email: d.git_email || "—", github_branch_protected: d.github_branch_protected,
-    injection_score: (d.scores || {}).injection_score != null ? (d.scores || {}).injection_score : 0,
-    intent_drift_score: log.drift, intent_tier: d.intent_tier || "—",
-    trust_score: d.trust_score != null ? d.trust_score : "—",
-  };
-  const evaluated = log.decision === "Deny"
-    ? [{ name: "Cedar forbid policy matched", d: "Deny" }]
-    : [{ name: "Cedar permit policy matched", d: "Allow" }];
+  const ctx = log.ctx || {};
+  const evaluated = [{
+    name: log.policyName || (log.decision === "Deny" ? "Cedar forbid policy matched" : "Cedar permit policy matched"),
+    d: log.decision,
+  }];
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
       <div style={{ position: "relative" }}>
@@ -4312,7 +4308,7 @@ function DlDetail({ log, onClose, onTraceFilter, onIntent }) {
             return (
               <div key={k} style={{ display: "flex", gap: 8, fontSize: 12.5 }}>
                 <span style={{ fontWeight: 600, color: "var(--blue)", whiteSpace: "nowrap" }}>{k}:</span>
-                <span className="mono" style={{ color, wordBreak: "break-all" }}>{v == null ? "—" : String(v)}</span>
+                <span className="mono" style={{ color, wordBreak: "break-all" }}>{v == null ? "—" : (typeof v === "object" ? JSON.stringify(v) : String(v))}</span>
               </div>
             );
           })}
@@ -4359,7 +4355,10 @@ function DlReplaceModal({ onCancel, onConfirm }) {
 function DecisionLogsV2() {
   const reva = useReva();
   const raw = (reva.raw && reva.raw.decisions) || [];
-  const LOGS = dlUseMemo(() => raw.filter((d) => dlIsReal(d.user_email || d.oauth_email)).map((d, i) => dlMap(d, i)), [raw]);
+  const LOGS = dlUseMemo(() => raw
+    .filter((d) => !!d.cedar_action || d.effect === "Deny" || d.effect === "HITL")
+    .filter((d) => dlIsReal((d.cedar_context && d.cedar_context.os_user) || d.user_email || d.oauth_email))
+    .map((d, i) => dlMap(d, i)), [raw]);
   const [openId, setOpenId] = React.useState(null);
   const [traceFilter, setTraceFilter] = React.useState(null);
   const [confirmTrace, setConfirmTrace] = React.useState(null);
@@ -4458,30 +4457,32 @@ function ipClamp(v) { return Math.max(0, Math.min(1, v)); }
 
 function ipCompute(d) {
   d = d || {};
+  const ctx = d.cedar_context || {};
   const sc = d.scores || {};
-  const oauth = d.oauth_email || d.user_email || "";
-  const git = d.git_email || "";
-  const assignee = d.jira_assignee_email || "";
-  const action = d.tool || "—";
-  const tier = d.intent_tier || "read";
-  const cr = d.command_risk || "";
-  const declared = d.declared_scope || d.initial_scope || "Review the docs directory";
-  const filePath = d.file_path || d.target || d.prompt || "";
+  const oauth = ctx.oauth_email || d.oauth_email || ctx.os_user || d.user_email || "";
+  const git = ctx.git_email || d.git_email || "";
+  const assignee = ctx.jira_assignee_email || d.jira_assignee_email || "";
+  const action = d.cedar_action || d.tool || "—";
+  const tier = ctx.intent_tier || "read";
+  const cr = ctx.command_risk || "";
+  const declared = ctx.declared_scope || ctx.initial_scope || d.declared_scope || "Review the docs directory";
+  const filePath = d.cedar_resource || ctx.file_path || ctx.command || "";
+  const declaredRead = /review|read|summar|inspect|audit|docs|test/i.test(declared) || tier === "read";
 
   // Actor — identity integrity
   const idMismatch = (!!git && !!oauth && git !== oauth) || (!!assignee && !!oauth && assignee !== oauth);
   const actor = idMismatch ? 0.9 : 0.12;
   // Target — declared folder vs actual file
   let target = 0.2;
-  const folder = (declared.match(/([\w./-]+\/)/) || [])[1] || (/docs/i.test(declared) ? "docs" : "");
+  const folder = (declared.match(/([\w.-]+\/)/) || [])[1] || (/docs/i.test(declared) ? "docs" : /tests?/i.test(declared) ? "test" : "");
   if (filePath && folder && !String(filePath).toLowerCase().includes(folder.toLowerCase().replace(/\/$/, ""))) target = 0.88;
   // Value — command/operation risk
   const value = cr === "destructive" ? 0.9 : cr === "restricted" ? 0.55 : (action === "EditFile" || action === "WriteFile") ? 0.6 : 0.2;
-  // Action — declared tier (read) vs actual action
-  const mutating = ["EditFile", "WriteFile", "RunBash", "MCPWrite", "DelegateScope", "SpawnAgent"].includes(action);
-  const actionV = (tier === "read" && mutating) ? 0.62 : mutating ? 0.4 : 0.15;
+  // Action — declared read/review intent vs actual action
+  const mutating = ["EditFile", "WriteFile", "RunBash", "MCPWrite", "MCPExecute", "DelegateScope", "SpawnAgent"].includes(action);
+  const actionV = (declaredRead && mutating) ? 0.62 : mutating ? 0.4 : 0.15;
   // Scope — declared task boundary vs current
-  const driftRaw = sc.intent_drift_score != null ? sc.intent_drift_score : (sc.intent_mismatch_score || 0);
+  const driftRaw = ctx.intent_drift_score != null ? ctx.intent_drift_score : (sc.intent_drift_score != null ? sc.intent_drift_score : (sc.intent_mismatch_score || 0));
   const scope = ipClamp(driftRaw / 100) || (target > 0.5 ? 0.5 : 0.25);
 
   const axes = { Actor: actor, Target: target, Value: value, Action: actionV, Scope: scope };

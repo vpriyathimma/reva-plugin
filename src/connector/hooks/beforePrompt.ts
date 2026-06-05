@@ -7,7 +7,7 @@ import { classifyPrompt, recordBypassAttempt, recordBlock, getPersistentTrust } 
 import { logDecision }                from '../discovery/enroll';
 import { sessionStore }               from '../discovery/enroll';
 import { claudeSessionUserStore }     from './onSessionStart';
-import { getOrCreateSessionTrace, evaluateCedar, buildClaudeCodeInjectionPayload } from '../../api/pdpEvaluate';
+import { getOrCreateSessionTrace, evaluateCedar, buildClaudeCodeInjectionPayload, cedarFields } from '../../api/pdpEvaluate';
 
 import { subagentContextStore } from './beforeToolCall';
 import { isQuarantined, clip as quarantineClip } from '../../api/quarantine';
@@ -161,9 +161,9 @@ export async function handlePromptSubmit(req: Request, res: Response) {
         quarantineClip({ osUser: user_email, policyId: 'AAI-UAP-001', reason: `${detection} detected in prompt` });
       }
       const projectName = (req.body.project_name as string) || 'unknown';
-      let cedarResult;
+      let cedarResult; let injPayload: any;
       try {
-        cedarResult = await evaluateCedar(buildClaudeCodeInjectionPayload({
+        injPayload = buildClaudeCodeInjectionPayload({
           osUser:        user_email,
           projectName,
           sessionId:     session_id,
@@ -173,7 +173,8 @@ export async function handlePromptSubmit(req: Request, res: Response) {
           isJailbreak,
           scores:        result.scores,
           trustScore:    result.trust_score,
-        }));
+        });
+        cedarResult = await evaluateCedar(injPayload);
       } catch (e: any) {
         console.error('[Prompt:Cedar] SubmitPrompt eval failed:', e.message);
       }
@@ -194,6 +195,7 @@ export async function handlePromptSubmit(req: Request, res: Response) {
         agent_type:     'main',
         command_risk:   '',
         file_zone:      '',
+        ...cedarFields(injPayload || {}),
       });
       console.log(`[Prompt:Cedar] ${detection} session=${session_id} decision=${cedarResult?.decision ?? 'error'} policy=${cedarResult?.policy_name || detection} trust=${result.trust_score}`);
     } else {

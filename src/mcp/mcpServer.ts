@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { verifyConnectorToken } from '../connector/oauth/token';
 import { sessionStore, logDecision, enrollSession } from '../connector/discovery/enroll';
 import { resolveAgentName } from '../api/agentResolver';
-import { evaluateCedar, buildCallToolPayload, buildSubmitPromptPayload, getOrCreateSessionTrace } from '../api/pdpEvaluate';
+import { evaluateCedar, buildCallToolPayload, buildSubmitPromptPayload, getOrCreateSessionTrace, cedarFields } from '../api/pdpEvaluate';
 import { classifyToolCall, classifyPrompt } from '../api/intentClassifier';
 import { discoveredServers } from '../api/mcpProbe';
 import { sessionIntentStore, queryHistoryStore } from '../connector/hooks/beforePrompt';
@@ -189,16 +189,17 @@ async function handleMcpRequest(req: Request, res: Response) {
       queryHistoryStore.set(sessionId, history.slice(-10));
       getOrCreateSessionTrace(sessionId);
 
-      const cedarResult = await evaluateCedar(buildSubmitPromptPayload({
+      const ccPromptPayload = buildSubmitPromptPayload({
         agentName, agentId: agentCid, humanSub: user.email,
         clientSource: 'cowork', sessionId,
         scores: { ...result.scores, trust_score: result.trust_score },
         intent: result.intent, priorIntents,
         query: prompt, queryHistory: history.slice(-3).join(', '),
-      }));
+      });
+      const cedarResult = await evaluateCedar(ccPromptPayload);
 
       const permitted = cedarResult.decision === 'allow';
-      logDecision({ timestamp: new Date().toISOString(), session_id: sessionId, user_email: user.email, tool: 'prompt', server: 'cowork', sensitivity: result.sensitivity, effect: permitted ? 'Permit' : 'Deny', reason: cedarResult.policy_name || '' });
+      logDecision({ timestamp: new Date().toISOString(), session_id: sessionId, user_email: user.email, tool: 'prompt', server: 'cowork', sensitivity: result.sensitivity, effect: permitted ? 'Permit' : 'Deny', reason: cedarResult.policy_name || '', ...cedarFields(ccPromptPayload) });
 
       return res.json({
         jsonrpc: '2.0',
@@ -225,7 +226,7 @@ async function handleMcpRequest(req: Request, res: Response) {
       const SCOPE: Record<string, string> = { low: 'MCPTool:Read', medium: 'MCPTool:Write', high: 'MCPTool:Communicate', critical: 'MCPTool:Destructive' };
 
       getOrCreateSessionTrace(sessionId);
-      const cedarResult = await evaluateCedar(buildCallToolPayload({
+      const ctPayload = buildCallToolPayload({
         agentName, agentId: agentCid, toolName: mcpToolName, serverName,
         humanSub: user.email, clientSource: 'cowork', sessionId,
         sensitivity: result.sensitivity, toolScope: SCOPE[result.sensitivity] || 'MCPTool:Read',
@@ -233,7 +234,8 @@ async function handleMcpRequest(req: Request, res: Response) {
         hitlAcknowledged, intent: result.intent,
         priorIntents: sessionIntent?.prior_intents || '',
         query: sessionIntent?.prompt || '', queryHistory: '',
-      }));
+      });
+      const cedarResult = await evaluateCedar(ctPayload);
 
       let effect: 'Permit' | 'Deny' | 'HITL' = cedarResult.decision === 'allow' ? 'Permit' : cedarResult.decision === 'conditional_allow' ? 'HITL' : 'Deny';
       const reason = effect === 'Permit' ? 'Permitted' : cedarResult.policy_name || 'Denied by Cedar';
@@ -249,7 +251,7 @@ async function handleMcpRequest(req: Request, res: Response) {
         })();
       }
 
-      logDecision({ timestamp: new Date().toISOString(), session_id: sessionId, user_email: user.email, tool: mcpToolName, server: serverName, sensitivity: result.sensitivity, effect, reason });
+      logDecision({ timestamp: new Date().toISOString(), session_id: sessionId, user_email: user.email, tool: mcpToolName, server: serverName, sensitivity: result.sensitivity, effect, reason, ...cedarFields(ctPayload) });
 
       return res.json({
         jsonrpc: '2.0',
