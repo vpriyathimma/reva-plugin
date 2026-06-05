@@ -69,6 +69,8 @@ interface SessionStartInput {
   model?:            string;
   mcp_config?:       any;
   mcp_server_names?: string;  // comma-separated, from grep extraction
+  // Surface — raw CLAUDE_CODE_ENTRYPOINT value forwarded by the SessionStart hook (verbatim, no mapping)
+  entrypoint?:       string;
   // SPIRE identity + developer context — from ~/.claude.json
   claude_context?: {
     account_uuid:      string;
@@ -147,6 +149,7 @@ export async function handleSessionStart(req: Request, res: Response) {
     const os_type  = mapOsType(body.os_type || '');
     const hostname = body.hostname || '';
     const model    = body.model    || '';
+    const entrypoint = body.entrypoint || '';  // raw surface signal (CLAUDE_CODE_ENTRYPOINT), forwarded as-is — no defaulting/mapping
 
     // Parse MCP servers from local .mcp.json (Option B)
     const mcpFromConfig = parseMcpServers(body.mcp_config);
@@ -182,7 +185,7 @@ export async function handleSessionStart(req: Request, res: Response) {
       probeAllServers(mcp_servers);
     }
 
-    console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} agent=${agent_id} spiffe=${spiffe_id || 'none'} conn=${(body.claude_context as any)?.connection_type || 'local'} branch=${(body.claude_context as any)?.git_branch || 'none'} ticket=${(body.claude_context as any)?.jira_ticket_id || 'none'} mcp=[${mcp_servers.join(',')}]`);
+    console.log(`[SessionStart] session=${session_id} os_user=${os_user} cwd=${cwd} os=${os_type} host=${hostname} model=${model || 'plan default'} surface=${entrypoint || 'unknown'} agent=${agent_id} spiffe=${spiffe_id || 'none'} conn=${(body.claude_context as any)?.connection_type || 'local'} branch=${(body.claude_context as any)?.git_branch || 'none'} ticket=${(body.claude_context as any)?.jira_ticket_id || 'none'} mcp=[${mcp_servers.join(',')}]`);
 
     // Resolve identity and access (oauthEmail enables SSH fallback)
     const oauthEmail = claudeCtx?.email || undefined;
@@ -265,6 +268,7 @@ export async function handleSessionStart(req: Request, res: Response) {
       connection_type:    (body.claude_context as any)?.connection_type || 'local',
       ssh_client_ip:      (body.claude_context as any)?.ssh_client_ip || undefined,
       remote_os:          (body.claude_context as any)?.remote_os || undefined,
+      entrypoint:         entrypoint || undefined,
     });
 
     // ── PIP enrichment — query Jira + GitHub for session context ──

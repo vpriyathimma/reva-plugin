@@ -1453,6 +1453,7 @@ function SessionsPanel({ row, terminated }) {
                 <span className="help" style={{ marginLeft: "auto" }}>{relTimeP(sx.enrolled_at)}</span>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 9 }}>
+                {sx.entrypoint ? <span className="help">surface: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.entrypoint}</span></span> : null}
                 {sx.hostname ? <span className="help">host: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.hostname}</span></span> : null}
                 {sx.project_name ? <span className="help">project: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.project_name}</span></span> : null}
                 {sx.git_branch ? <span className="help">branch: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.git_branch}</span></span> : null}

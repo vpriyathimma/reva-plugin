@@ -146,6 +146,7 @@ router.get('/sessions', (_req, res) => {
     connection_type:   s.connection_type   || 'local',
     ssh_client_ip:     s.ssh_client_ip    || '',
     remote_os:         s.remote_os        || '',
+    entrypoint:        s.entrypoint       || '',
   }));
   res.json({ sessions, total: sessions.length });
 });
