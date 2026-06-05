@@ -59,8 +59,10 @@ function getDenyReason(pipCtx: any, cedarPayload: any): string {
     return `Privilege escalation detected (score: ${ctx.escalation_score}). This action is blocked.`;
   }
 
-  // Layer 2: Protected branch
-  if (ctx.github_branch_protected === true) {
+  // Layer 2: Protected branch — only writes/edits are gated by branch protection;
+  // reads, listing and reviews are never blocked by it, so don't claim it for them.
+  const deniedAction = cedarPayload?.action?.name || '';
+  if (ctx.github_branch_protected === true && (deniedAction === 'EditFile' || deniedAction === 'WriteFile')) {
     return `Protected branch — changes to protected branches require approval. Create a feature branch from your Jira ticket.`;
   }
 

@@ -313,6 +313,13 @@ export function setCommandRules(rules: CommandRule[]): void { commandRules = rul
 export function classifyCommand(cmd: string): 'safe' | 'restricted' | 'destructive' {
   if (!require('./securityConfig').isEnabled('commands_classification')) return 'safe';
   const c = cmd.toLowerCase().trim();
+  // Listing / navigation / metadata and plain file-content reads are low-risk
+  // operations → always 'safe' so the RunBash permit policy (command_risk == safe)
+  // fires. Out-of-scope reads are governed separately by intent-drift, not by
+  // command risk. Mutations are excluded and fall through to the rules below.
+  const SAFE_READ = /^(pwd|ls|dir|find|tree|fd|stat|file|du|df|wc|basename|dirname|realpath|readlink|echo|whoami|id|hostname|uname|date|env|printenv|which|type|cd|pushd|popd|clear|history|cat|head|tail|less|more|nl|strings|cut|sed|awk|od|xxd|grep|egrep|fgrep|rg)\b|^git\s+(status|branch|remote|rev-parse|config|show|diff|log|blame|show-ref)\b/;
+  const SAFE_MUTATES = /\b(rm|rmdir|mv|cp|mkdir|touch|truncate|dd|tee|chmod|chown|ln|shred)\b|\bsed\s+-i\b|\bgit\s+(commit|push|merge|rebase|reset|stash|tag|cherry-pick)\b|\b(npm|yarn|pnpm|pip|pip3|gem|cargo|go|apt|brew)\s+(install|add|remove|uninstall)\b/;
+  if (SAFE_READ.test(c) && !SAFE_MUTATES.test(c)) return 'safe';
   for (const rule of commandRules) {
     try {
       if (new RegExp(rule.pattern).test(c)) return rule.risk;

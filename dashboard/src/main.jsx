@@ -4455,6 +4455,26 @@ function IpSevBadge({ level }) {
 function ipSev(v) { return v >= 0.85 ? "Critical" : v >= 0.6 ? "High" : v >= 0.4 ? "Medium" : "Low"; }
 function ipClamp(v) { return Math.max(0, Math.min(1, v)); }
 
+const IP_MUT_CMD = /\b(rm|rmdir|mv|cp|mkdir|touch|truncate|dd|tee|chmod|chown|ln|shred)\b|\bsed\s+-i\b|\bgit\s+(commit|push|merge|rebase|reset|stash|tag|cherry-pick)\b|\b(npm|yarn|pnpm|pip|pip3|gem|cargo|go|apt|brew)\s+(install|add|remove|uninstall)\b/i;
+const IP_READ_CMD = /\b(cat|head|tail|less|more|nl|strings|cut|sed|awk|od|xxd|grep|egrep|fgrep|rg)\b|\bgit\s+(show|diff|log|blame)\b/i;
+const IP_ASKED_MUTATE = /\b(edit|update|modify|change|remove|delete|drop|write|creat|add|fix|refactor|renam|install|deploy|push|commit|merge|rewrite|patch|append)/i;
+const IP_STOP = new Set(["the","all","files","file","review","summarize","summary","directory","directories","folder","folders","and","for","a","an","to","me","list","please","this","that","its","their","code","project","contents","what","how","each","relate","overall","key","tech","stack","note","obvious","issues","concerns","concise","complete","provide","users"]);
+function ipTokensOf(text) { return (String(text || "").toLowerCase().match(/[a-z0-9._-]+/g) || []).map((t) => t.replace(/^[._-]+|[._-]+$/g, "")).filter((t) => t.length > 2 && !IP_STOP.has(t)); }
+function ipPathTail(p) {
+  // Use only the last two segments of each path, mirroring the server — the
+  // home/project prefix (…/saisrungaram/claude-demo-project/…) is shared by every
+  // file and must not count as scope overlap.
+  return String(p || "").split(/\s+/).filter((a) => a.includes("/")).map((seg) => {
+    const s = seg.replace(/^[a-z]+:\/\//i, "").split("/").filter(Boolean);
+    return s.slice(-2).join(" ");
+  }).join(" ").toLowerCase();
+}
+function ipOutOfScope(pathOrCmd, declared) {
+  const ask = ipTokensOf(declared); if (!ask.length) return false;
+  const tail = ipPathTail(pathOrCmd); if (!tail) return false;
+  return !ask.some((t) => tail.includes(t));
+}
+
 function ipCompute(d) {
   d = d || {};
   const ctx = d.cedar_context || {};
@@ -4463,31 +4483,65 @@ function ipCompute(d) {
   const git = ctx.git_email || d.git_email || "";
   const assignee = ctx.jira_assignee_email || d.jira_assignee_email || "";
   const action = d.cedar_action || d.tool || "—";
-  const tier = ctx.intent_tier || "read";
   const cr = ctx.command_risk || "";
-  const declared = ctx.declared_scope || ctx.initial_scope || d.declared_scope || "Review the docs directory";
-  const filePath = d.cedar_resource || ctx.file_path || ctx.command || "";
-  const declaredRead = /review|read|summar|inspect|audit|docs|test/i.test(declared) || tier === "read";
+  const declared = ctx.declared_scope || ctx.initial_scope || d.declared_scope || "the requested task";
+  const resource = d.cedar_resource || ctx.command || ctx.file_path || "";
+  const cmd = ctx.command || (action === "RunBash" ? resource : "");
+  const zone = ctx.file_zone || "";
+  const trust = ctx.trust_score != null ? ctx.trust_score : (d.trust_score != null ? d.trust_score : 70);
+  const driftScore = ctx.intent_drift_score != null ? ctx.intent_drift_score : (sc.intent_drift_score || 0);
+  const drifted = !!ctx.is_intent_drift || driftScore > 0;
 
-  // Actor — identity integrity
-  const idMismatch = (!!git && !!oauth && git !== oauth) || (!!assignee && !!oauth && assignee !== oauth);
-  const actor = idMismatch ? 0.9 : 0.12;
-  // Target — declared folder vs actual file
-  let target = 0.2;
-  const folder = (declared.match(/([\w.-]+\/)/) || [])[1] || (/docs/i.test(declared) ? "docs" : /tests?/i.test(declared) ? "test" : "");
-  if (filePath && folder && !String(filePath).toLowerCase().includes(folder.toLowerCase().replace(/\/$/, ""))) target = 0.88;
-  // Value — command/operation risk
-  const value = cr === "destructive" ? 0.9 : cr === "restricted" ? 0.55 : (action === "EditFile" || action === "WriteFile") ? 0.6 : 0.2;
-  // Action — declared read/review intent vs actual action
-  const mutating = ["EditFile", "WriteFile", "RunBash", "MCPWrite", "MCPExecute", "DelegateScope", "SpawnAgent"].includes(action);
-  const actionV = (declaredRead && mutating) ? 0.62 : mutating ? 0.4 : 0.15;
-  // Scope — declared task boundary vs current
-  const driftRaw = ctx.intent_drift_score != null ? ctx.intent_drift_score : (sc.intent_drift_score != null ? sc.intent_drift_score : (sc.intent_mismatch_score || 0));
-  const scope = ipClamp(driftRaw / 100) || (target > 0.5 ? 0.5 : 0.25);
+  // Mirror the server's classification of the action shape.
+  const askedMutate = IP_ASKED_MUTATE.test(declared);
+  const actionMutates = (action === "EditFile" || action === "WriteFile" || action === "MCPWrite") || cr === "destructive" || cr === "restricted" || (action === "RunBash" && IP_MUT_CMD.test(cmd));
+  const isContentRead = action === "ReadFile" || action === "MCPRead" || (action === "RunBash" && IP_READ_CMD.test(cmd) && !IP_MUT_CMD.test(cmd));
+  const isFileOp = isContentRead || action === "EditFile" || action === "WriteFile";
+
+  // Actor — identity divergence (continuous).
+  let actor = 0.05;
+  if (git && oauth && git !== oauth) actor += 0.6;
+  if (assignee && oauth && assignee !== oauth) actor += 0.3;
+  if (trust < 50) actor += 0.1; if (trust < 20) actor += 0.15;
+  actor = ipClamp(actor);
+
+  // Value — operation risk (continuous).
+  let value = cr === "destructive" ? 0.85 : cr === "restricted" ? 0.5 : 0.12;
+  if (action === "EditFile" || action === "WriteFile") value = Math.max(value, 0.6);
+  if (action === "MCPWrite" || action === "MCPExecute") value = Math.max(value, 0.5);
+  value += (ctx.escalation_score || 0) / 100 * 0.2 + (ctx.exfiltration_score || 0) / 100 * 0.2;
+  value = ipClamp(value);
+
+  // Action — did the action TYPE exceed the declared (read/review) intent? Safe
+  // listing/read is NOT a mutating action — this is the fix for `ls -la`.
+  let actionV;
+  if (!askedMutate && actionMutates) actionV = cr === "destructive" ? 0.85 : 0.6;
+  else if (actionMutates) actionV = 0.35;
+  else actionV = 0.1;
+  actionV = ipClamp(actionV);
+
+  // Target — resource-scope distance, only for actions that touch a file.
+  let target = 0.08, outScope = false;
+  if (isFileOp) {
+    const z = zone === "secrets" ? 0.9 : zone === "config" ? 0.6 : zone === "src" ? 0.3 : zone === "docs" ? 0.22 : 0.16;
+    outScope = ipOutOfScope(resource, declared);
+    target = ipClamp(outScope ? 0.6 + z * 0.4 : z * 0.5);
+  }
+
+  // Scope — boundary: blend of server drift verdict, target distance, breadth.
+  const priors = String(ctx.prior_intents || "").split(/[,|]/).filter(Boolean).length;
+  const scope = ipClamp(Math.max(driftScore / 100, target * 0.7, 0.08 + priors * 0.03));
 
   const axes = { Actor: actor, Target: target, Value: value, Action: actionV, Scope: scope };
-  const agg = ipClamp(driftRaw > 0 ? driftRaw / 100 : (actor + target + value + actionV + scope) / 5);
-  return { axes, agg, idMismatch, oauth, git, assignee, action, tier, cr, declared, filePath, mutating };
+  const arr = [actor, target, value, actionV, scope];
+  const mx = Math.max(...arr), mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const agg = ipClamp(0.62 * mx + 0.38 * mean);
+
+  return {
+    axes, agg, drifted, driftScore, oauth, git, assignee, action, cr, declared, resource, zone,
+    askedMutate, actionMutates, isContentRead, isFileOp, outScope,
+    idMismatch: (!!git && !!oauth && git !== oauth) || (!!assignee && !!oauth && assignee !== oauth),
+  };
 }
 
 function IpRadar({ axes }) {
@@ -4562,24 +4616,30 @@ function IntentProfile({ log, onBack }) {
   const d = (log && log._d) || {};
   const traceId = (log && log.traceId) || "—";
   const r = ipCompute(d);
-  const folder = (r.declared.match(/docs|tests|src|[\w-]+ directory/i) || ["the declared folder"])[0];
+  const drifted = r.drifted;
+  const behavior = r.action + (r.resource ? " · " + r.resource : "");
+  const sev = (v) => ipSev(v);
   const cards = [
-    { icon: "user", tint: "blue", score: r.axes.Actor, label: "Actor", sub: "Identity", sev: ipSev(r.axes.Actor),
-      from: r.oauth || "authenticated user", to: r.idMismatch ? (r.git || r.assignee || "different identity") : (r.oauth || "authenticated user"), drift: r.idMismatch,
-      note: r.idMismatch ? "Acting identity diverged from the authenticated user — committer/assignee email does not match the OAuth identity, an Identity Integrity violation." : "Acting identity matches the authenticated developer throughout — no identity drift." },
-    { icon: "target", tint: r.axes.Target >= 0.6 ? "red" : "blue", score: r.axes.Target, label: "Target", sub: "Resource", sev: ipSev(r.axes.Target),
-      from: folder, to: r.filePath ? (String(r.filePath).slice(0, 40)) : "declared scope", drift: r.axes.Target >= 0.5,
-      note: r.axes.Target >= 0.5 ? "Accessed files outside the declared scope — reading or touching paths that were never part of the requested task." : "Resource access stayed within the declared scope." },
-    { icon: "coin", tint: r.axes.Value >= 0.6 ? "coral" : "green", score: r.axes.Value, label: "Value", sub: "Operation", sev: ipSev(r.axes.Value),
-      from: r.tier === "read" ? "read-only" : "declared operation", to: r.cr ? (r.cr + " " + r.action) : r.action, drift: r.axes.Value >= 0.5,
-      note: r.axes.Value >= 0.5 ? "Operation class escalated beyond the declared read intent — a mutating or higher-risk command class." : "Operation remained low-risk and consistent with the declared intent." },
-    { icon: "play", tint: r.axes.Action >= 0.6 ? "coral" : "green", score: r.axes.Action, label: "Action", sub: "Intent Type", sev: ipSev(r.axes.Action),
-      from: r.tier === "read" ? "review / read" : r.tier, to: r.action, drift: r.axes.Action >= 0.5,
-      note: r.axes.Action >= 0.5 ? "Action type exceeded the declared intent tier — the session declared a read/review task but performed a mutating action." : "Action type is consistent with the declared intent tier." },
-    { icon: "pin", tint: r.axes.Scope >= 0.6 ? "red" : "purple", score: r.axes.Scope, label: "Scope", sub: "Boundary", sev: ipSev(r.axes.Scope),
-      from: r.declared.slice(0, 48), to: r.axes.Scope >= 0.5 ? "drifted scope" : r.declared.slice(0, 48), drift: r.axes.Scope >= 0.5,
-      note: r.axes.Scope >= 0.5 ? "Execution drifted beyond the declared task boundary — work expanded past what the developer originally requested." : "Execution stayed within the declared task boundary." },
-  ];
+    { icon: "user", tint: r.idMismatch ? "red" : "blue", score: r.axes.Actor, label: "Actor", sub: "Identity", elevated: r.idMismatch,
+      from: r.oauth || "authenticated user", to: r.idMismatch ? (r.git || r.assignee || "different identity") : (r.oauth || "authenticated user"),
+      note: r.idMismatch ? "Acting identity diverged from the authenticated user — the committer/assignee email does not match the OAuth identity (Identity Integrity)." : "Acting identity matches the authenticated developer throughout — no identity drift." },
+    { icon: "target", tint: r.outScope ? "red" : "blue", score: r.axes.Target, label: "Target", sub: "Resource", elevated: r.outScope,
+      from: r.isFileOp ? "asked folders" : "no file read", to: r.isFileOp ? (r.resource || "—") : "listing / metadata only",
+      note: !r.isFileOp ? "No file contents were read — a listing or metadata action, which is never out of scope." : r.outScope ? "Read a file outside the asked folders — a path that was never part of the request." : "File access stayed within the asked folders." },
+    { icon: "coin", tint: r.axes.Value >= 0.5 ? "coral" : "green", score: r.axes.Value, label: "Value", sub: "Operation", elevated: r.axes.Value >= 0.5,
+      from: "declared intent", to: (r.cr ? r.cr + " " : "") + r.action,
+      note: r.axes.Value >= 0.5 ? "Operation carries elevated risk — a mutating or higher-risk command class." : "Operation remained low-risk and consistent with the declared intent." },
+    { icon: "play", tint: (!r.askedMutate && r.actionMutates) ? "coral" : "green", score: r.axes.Action, label: "Action", sub: "Intent Type", elevated: (!r.askedMutate && r.actionMutates),
+      from: r.askedMutate ? "declared change" : "review / read", to: r.action,
+      note: (!r.askedMutate && r.actionMutates) ? "Action type exceeded the declared intent — a mutating action when only a read or review was asked." : "Action type is consistent with the declared intent." },
+    { icon: "pin", tint: drifted ? "red" : "purple", score: r.axes.Scope, label: "Scope", sub: "Boundary", elevated: drifted,
+      from: r.declared, to: drifted ? "drifted beyond the asked scope" : "within the asked scope",
+      note: drifted ? "Execution moved beyond the declared task boundary — work the developer did not ask for." : "Execution stayed within the declared task boundary." },
+  ].map((c) => ({ ...c, sev: sev(c.score), drift: c.elevated }));
+
+  const scoreColor = drifted ? "var(--red)" : "var(--teal)";
+  const statusText = drifted ? (r.agg >= 0.85 ? "High / drifted" : "Drifted") : "Aligned";
+
   return (
     <div style={{ padding: 28 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 22 }}>
@@ -4599,23 +4659,26 @@ function IntentProfile({ log, onBack }) {
           <div className="card" style={{ padding: 20 }}>
             <div className="section-title" style={{ fontSize: 15, marginBottom: 14 }}>Intent Comparison</div>
             <div style={{ display: "flex", alignItems: "stretch", gap: 14 }}>
-              <div style={{ flex: 1, background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ flex: 1, minWidth: 0, background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "var(--blue)", marginBottom: 6 }}>Declared Scope</div>
-                <div style={{ fontSize: 13.5, color: "var(--ink)", fontStyle: "italic" }}>"{r.declared}"</div>
+                <div style={{ fontSize: 13.5, color: "var(--ink)", fontStyle: "italic", whiteSpace: "normal", wordBreak: "break-word" }}>"{r.declared}"</div>
               </div>
               <div style={{ display: "grid", placeItems: "center" }}><Icon name="arrowRight" size={20} color="var(--ink-4)" /></div>
-              <div style={{ flex: "0 0 40%", background: "var(--red-tint)", border: "1px solid #F5C2C2", borderRadius: 12, padding: "14px 16px" }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--red)", marginBottom: 6 }}>Drifted Behavior</div>
-                <div style={{ fontSize: 13.5, color: "var(--coral-ink)", fontStyle: "italic" }}>"{r.action}{r.filePath ? " · " + String(r.filePath).slice(0, 34) : ""}"</div>
+              <div style={{ flex: "0 0 42%", minWidth: 0, background: drifted ? "var(--red-tint)" : "var(--green-tint)", border: "1px solid " + (drifted ? "#F5C2C2" : "#BFE3D2"), borderRadius: 12, padding: "14px 16px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: drifted ? "var(--red)" : "var(--teal)", marginBottom: 6 }}>
+                  <Icon name={drifted ? "flame" : "checkCircle"} size={14} color={drifted ? "var(--red)" : "var(--teal)"} />
+                  {drifted ? "Drifted Behavior" : "Scope Aligned"}
+                </div>
+                <div style={{ fontSize: 13.5, color: drifted ? "var(--coral-ink)" : "var(--ink)", fontStyle: "italic", whiteSpace: "normal", wordBreak: "break-word" }}>"{behavior}"</div>
               </div>
             </div>
           </div>
           <div className="card" style={{ padding: 20 }}>
             <div className="section-title" style={{ fontSize: 15, marginBottom: 14 }}>Drift Score</div>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-              <span style={{ fontSize: 38, fontWeight: 700, color: "var(--red)", letterSpacing: "-.03em", lineHeight: 1 }}>{r.agg.toFixed(2)}</span>
-              <span style={{ fontSize: 13.5, color: "var(--ink-3)", fontWeight: 500 }}>{r.agg >= 0.6 ? "High / drifted" : r.agg >= 0.4 ? "Misaligned" : "Aligned"}</span>
-              <IpSevBadge level={ipSev(r.agg)} />
+              <span style={{ fontSize: 38, fontWeight: 700, color: scoreColor, letterSpacing: "-.03em", lineHeight: 1 }}>{r.agg.toFixed(2)}</span>
+              <span style={{ fontSize: 13.5, color: "var(--ink-3)", fontWeight: 500 }}>{statusText}</span>
+              <IpSevBadge level={sev(r.agg)} />
             </div>
             <IpScoreBar score={r.agg} />
           </div>

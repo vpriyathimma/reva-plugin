@@ -372,12 +372,12 @@ function scopeTokens(text: string): Set<string> {
 // project prefix (/Users/<me>/<project>/...) doesn't leak generic tokens.
 function actionTargetTokens(target: string): Set<string> {
   if (!target) return new Set();
-  const candidates = /\s/.test(target)
-    ? target.split(/\s+/).filter(a => a && !a.startsWith('-') && (a.includes('/') || a.includes('.') || a.includes(':')))
-    : [target];
-  const list = candidates.length ? candidates : [target];
+  // Only real path-like arguments name a resource. A bare command such as
+  // `ls -la` or `pwd` references no file → no target → no scope drift. We require
+  // a '/' so a command name ("ls", "pwd") is never mistaken for a resource.
+  const candidates = target.split(/\s+/).filter(a => a && !a.startsWith('-') && a.includes('/'));
   const out = new Set<string>();
-  for (const c of list) {
+  for (const c of candidates) {
     let frag = c.includes('://') ? (c.split('://')[1] || c) : c;
     const segs = frag.split('/').filter(Boolean);
     const tail = (segs.length ? segs.slice(-2) : [frag]).join(' ');
@@ -394,6 +394,27 @@ const ASKED_MUTATE = /\b(edit|edits|edited|editing|update|updates|updated|updati
 // Does THIS action mutate state (vs. read/inspect)?
 const MUTATING_TOOL = /^(edit|write|multiedit|notebookedit|str_replace|create_file)$/i;
 const MUTATING_CMD  = /\b(rm|rmdir|mv|cp|mkdir|touch|truncate|dd|tee|chmod|chown|ln|shred)\b|\bsed\s+-i\b|\bgit\s+(commit|push|merge|rebase|reset|stash|tag|cherry-pick)\b|\b(npm|yarn|pnpm|pip|pip3|gem|cargo|go|apt|brew)\s+(install|add|remove|uninstall)\b/i;
+
+// Tier 2 — commands (or tools) that read a FILE'S CONTENTS. Scope drift is judged
+// ONLY for these: a content read of a file outside the asked folders is drift.
+const READ_CMD = /\b(cat|head|tail|less|more|nl|strings|cut|sed|awk|od|xxd|grep|egrep|fgrep|rg)\b|\bgit\s+(show|diff|log|blame)\b/i;
+// Tier 1 — listing / navigation / metadata. These read no file content, so they
+// are NEVER drift, in any folder (ls, pwd, find, tree, stat, …).
+const LISTING_CMD = /^\s*(pwd|ls|dir|find|tree|fd|stat|file|du|df|wc|basename|dirname|realpath|readlink|echo|whoami|id|hostname|uname|date|env|printenv|which|type|cd|pushd|popd|clear|history)\b|\bgit\s+(status|branch|remote|rev-parse|config|show-ref)\b/i;
+
+// Does this action read a file's contents? Read/Grep tools, or a Tier-2 bash read.
+// Listing/nav/metadata (Tier 1) and bare commands return false → never scope drift.
+function isFileContentRead(tool_name: string, target: string): boolean {
+  const t = (tool_name || '').toLowerCase();
+  if (t === 'read' || t === 'grep') return true;          // Read/Grep tools read content
+  if (t === 'glob') return false;                         // Glob lists paths, no content
+  if (t === 'bash') {
+    const cmd = target || '';
+    if (LISTING_CMD.test(cmd) && !READ_CMD.test(cmd)) return false;  // pure listing/nav
+    return READ_CMD.test(cmd);                            // cat/head/grep/… = content read
+  }
+  return false;                                            // edits/writes handled as mutation
+}
 function isMutatingAction(tool_name: string, target: string): boolean {
   if (MUTATING_TOOL.test(tool_name || '')) return true;
   return MUTATING_CMD.test(target || '');   // for Bash, target is the command
@@ -414,9 +435,17 @@ export function checkIntentDrift(params: {
     return { is_intent_drift: true, intent_drift_score: 90, reduces_trust: true };
   }
 
-  // Scope drift — action targets a resource the developer never asked for (a
-  // different folder / host). Denied, but NO trust penalty — it's containment, not
-  // a trust signal. An unspecific ask ("list my files") names no target → no drift.
+  // Scope drift applies ONLY to reading a file's CONTENTS. Listing / navigation /
+  // metadata (ls, pwd, find, tree, stat, …) read no file content, so they are
+  // never drift — in any folder. This is the difference between "show me what's
+  // here" (always fine) and "open this specific file" (fine only in scope).
+  if (!isFileContentRead(params.tool_name || '', params.target || '')) {
+    return { is_intent_drift: false, intent_drift_score: 0, reduces_trust: false };
+  }
+
+  // Scope drift — a content read whose target file is OUTSIDE the folders/files
+  // named in the ask. An unspecific ask ("list my files") names no target → no
+  // drift; a read of a file inside an asked folder → no drift.
   const asked = new Set<string>([...scopeTokens(params.declared_scope), ...scopeTokens(params.initial_scope)]);
   if (asked.size === 0) return { is_intent_drift: false, intent_drift_score: 0, reduces_trust: false };
   const target = actionTargetTokens(params.target);
