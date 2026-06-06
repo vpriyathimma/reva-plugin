@@ -4621,6 +4621,19 @@ function IntentProfile({ log, onBack }) {
   const traceId = (log && log.traceId) || "—";
   const r = ipCompute(d);
   const drifted = r.drifted;
+  // Display verdict (render-only, additive): derive the headline / colour / badge
+  // from the computed aggregate so the words match the radar and the marker's band.
+  // Uses the same 0.4 / 0.6 thresholds the score bar already draws. The backend
+  // is_intent_drift / intent_drift_score flag (`drifted`) is kept as an elevator,
+  // not the sole driver — read alone it is unpopulated and always rendered "Aligned".
+  // No change to ipCompute scoring or to the backend signal.
+  const band = (drifted || r.agg >= 0.6) ? "drifted" : r.agg >= 0.4 ? "misaligned" : "aligned";
+  const bandColor = band === "drifted" ? "var(--red)" : band === "misaligned" ? "var(--amber)" : "var(--teal)";
+  // Scope card mirrors its own axis (as the other four cards already mirror theirs),
+  // validated: assert scope drift only when the declared scope is evaluable (has
+  // scope tokens) — otherwise the boundary can't be judged and we stay aligned.
+  const scopeEvaluable = ipTokensOf(r.declared).length > 0;
+  const scopeDrift = drifted || (scopeEvaluable && r.axes.Scope >= 0.4);
   const behavior = r.action + (r.resource ? " · " + r.resource : "");
   const sev = (v) => ipSev(v);
   const cards = [
@@ -4636,13 +4649,13 @@ function IntentProfile({ log, onBack }) {
     { icon: "play", tint: (!r.askedMutate && r.actionMutates) ? "coral" : "green", score: r.axes.Action, label: "Action", sub: "Intent Type", elevated: (!r.askedMutate && r.actionMutates),
       from: r.askedMutate ? "declared change" : "review / read", to: r.action,
       note: (!r.askedMutate && r.actionMutates) ? "Action type exceeded the declared intent — a mutating action when only a read or review was asked." : "Action type is consistent with the declared intent." },
-    { icon: "pin", tint: drifted ? "red" : "purple", score: r.axes.Scope, label: "Scope", sub: "Boundary", elevated: drifted,
-      from: r.declared, to: drifted ? "drifted beyond the asked scope" : "within the asked scope",
-      note: drifted ? "Execution moved beyond the declared task boundary — work the developer did not ask for." : "Execution stayed within the declared task boundary." },
+    { icon: "pin", tint: scopeDrift ? "red" : "purple", score: r.axes.Scope, label: "Scope", sub: "Boundary", elevated: scopeDrift,
+      from: r.declared, to: scopeDrift ? "drifted beyond the asked scope" : "within the asked scope",
+      note: scopeDrift ? "Execution moved beyond the declared task boundary — work the developer did not ask for." : "Execution stayed within the declared task boundary." },
   ].map((c) => ({ ...c, sev: sev(c.score), drift: c.elevated }));
 
-  const scoreColor = drifted ? "var(--red)" : "var(--teal)";
-  const statusText = drifted ? (r.agg >= 0.85 ? "High / drifted" : "Drifted") : "Aligned";
+  const scoreColor = bandColor;
+  const statusText = band === "drifted" ? (r.agg >= 0.85 ? "High / drifted" : "Drifted") : band === "misaligned" ? "Misaligned" : "Aligned";
 
   return (
     <div style={{ padding: 28 }}>
@@ -4668,13 +4681,23 @@ function IntentProfile({ log, onBack }) {
                 <div style={{ fontSize: 13.5, color: "var(--ink)", fontStyle: "italic", whiteSpace: "normal", wordBreak: "break-word" }}>"{r.declared}"</div>
               </div>
               <div style={{ display: "grid", placeItems: "center" }}><Icon name="arrowRight" size={20} color="var(--ink-4)" /></div>
-              <div style={{ flex: "0 0 42%", minWidth: 0, background: drifted ? "var(--red-tint)" : "var(--green-tint)", border: "1px solid " + (drifted ? "#F5C2C2" : "#BFE3D2"), borderRadius: 12, padding: "14px 16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: drifted ? "var(--red)" : "var(--teal)", marginBottom: 6 }}>
-                  <Icon name={drifted ? "flame" : "checkCircle"} size={14} color={drifted ? "var(--red)" : "var(--teal)"} />
-                  {drifted ? "Drifted Behavior" : "Scope Aligned"}
-                </div>
-                <div style={{ fontSize: 13.5, color: drifted ? "var(--coral-ink)" : "var(--ink)", fontStyle: "italic", whiteSpace: "normal", wordBreak: "break-word" }}>"{behavior}"</div>
-              </div>
+              {(() => {
+                const bg = band === "drifted" ? "var(--red-tint)" : band === "misaligned" ? "var(--amber-tint)" : "var(--green-tint)";
+                const bd = band === "drifted" ? "#F5C2C2" : band === "misaligned" ? "#F3D9A6" : "#BFE3D2";
+                const fg = band === "drifted" ? "var(--red)" : band === "misaligned" ? "var(--amber-ink)" : "var(--teal)";
+                const ic = band === "aligned" ? "checkCircle" : "flame";
+                const tx = band === "drifted" ? "Drifted Behavior" : band === "misaligned" ? "Scope Misaligned" : "Scope Aligned";
+                const tc = band === "aligned" ? "var(--ink)" : "var(--coral-ink)";
+                return (
+                  <div style={{ flex: "0 0 42%", minWidth: 0, background: bg, border: "1px solid " + bd, borderRadius: 12, padding: "14px 16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: fg, marginBottom: 6 }}>
+                      <Icon name={ic} size={14} color={fg} />
+                      {tx}
+                    </div>
+                    <div style={{ fontSize: 13.5, color: tc, fontStyle: "italic", whiteSpace: "normal", wordBreak: "break-word" }}>"{behavior}"</div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
           <div className="card" style={{ padding: 20 }}>
