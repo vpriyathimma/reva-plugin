@@ -43,6 +43,15 @@ const router = Router();
 const codexSessionUser = new Map<string, string>();
 // session_id → { surface } for tagging subsequent events
 const codexSessionSurface = new Map<string, string>();
+// session_id → { declared, initial } prompt scope — threaded into tool-call
+// Cedar context (declared_scope/initial_scope) so the dashboard renders the
+// Intent Profile button on Codex tool decisions, same as Claude Code.
+const codexSessionScope = new Map<string, { declared: string; initial: string }>();
+function recordScope(session_id: string, prompt: string) {
+  if (!session_id || !prompt) return;
+  const cur = codexSessionScope.get(session_id);
+  codexSessionScope.set(session_id, { declared: prompt, initial: cur?.initial || prompt });
+}
 
 function osUserFrom(req: Request): string {
   return (req.body?.os_user as string)
@@ -139,54 +148,66 @@ router.post('/codex/prompt', async (req, res) => {
     const surface    = codexSessionSurface.get(session_id) || b.surface || 'codex_cli';
     const ts = new Date().toISOString();
 
-    if (!isEnabled('prompt_injection')) return res.json({});   // toggle off → no scan
+    if (!isEnabled('prompt_injection')) { recordScope(session_id, prompt); return res.json({}); }   // toggle off → no scan
 
     const result      = classifyPrompt(prompt, session_id, user_email);
     const isInjection = result.scores.injection_score > 50;
     const isJailbreak = result.scores.jailbreak_score > 50;
     const trust       = getPersistentTrust(user_email);
 
-    const payload = {
-      principal: { type: 'Developer', id: user_email, properties: { os_user: user_email } },
-      action:    { name: 'SubmitPrompt' },
-      resource:  { type: 'Prompt', id: `${session_id.slice(0, 8)}-prompt`, properties: { session_id } },
-      context: {
-        access_state: 'Active',
-        os_user: user_email,
-        coding_agent: CODING_AGENT,
-        surface,
-        is_injection: isInjection,
-        is_jailbreak: isJailbreak,
-        injection_score: result.scores.injection_score ?? 0,
-        jailbreak_score: result.scores.jailbreak_score ?? 0,
-        trust_score: trust,
-        prompt: prompt.slice(0, 500),
-      },
-      session_id,
-    };
+    // Track the prompt as this session's declared scope (used by the tool gate
+    // for intent-drift context + the Intent Profile button).
+    recordScope(session_id, prompt);
 
-    let decision = 'allow', policy: string | undefined;
-    try { const r = await evaluateCedar(payload); decision = r.decision; policy = r.policy_name; }
-    catch (e: any) { console.error('[CODEX:prompt] cedar', e.message); }
-
+    // Mirror Claude Code exactly:
+    //  • Clean prompt  → NO Cedar call (SubmitPrompt has only forbid policies, so
+    //    a clean prompt would default-deny). Log a classify-only Permit. Enforcement
+    //    is deferred to the tool gate (PreToolUse/PermissionRequest).
+    //  • Injection/JB  → record the block + route through Cedar so the deny is in the
+    //    decision log, but the prompt is NEVER blocked here — effects are enforced at
+    //    the tool gate via injection_score/trust in context.
     if (isInjection || isJailbreak) {
-      recordBlock(user_email, { type: isInjection ? 'prompt_injection' : 'jailbreak_attempt', prompt: prompt.slice(0, 200), score: isInjection ? result.scores.injection_score : result.scores.jailbreak_score, timestamp: ts });
+      const detection = isInjection ? 'prompt_injection' : 'jailbreak_attempt';
+      recordBlock(user_email, { type: detection, prompt: prompt.slice(0, 200), score: isInjection ? result.scores.injection_score : result.scores.jailbreak_score, timestamp: ts });
+
+      const payload = {
+        principal: { type: 'Developer', id: user_email, properties: { os_user: user_email } },
+        action:    { name: 'SubmitPrompt' },
+        resource:  { type: 'Prompt', id: `${session_id.slice(0, 8)}-prompt`, properties: { session_id } },
+        context: {
+          access_state: 'Active', os_user: user_email, coding_agent: CODING_AGENT, surface,
+          is_injection: isInjection, is_jailbreak: isJailbreak,
+          injection_score: result.scores.injection_score ?? 0,
+          jailbreak_score: result.scores.jailbreak_score ?? 0,
+          trust_score: trust, prompt: prompt.slice(0, 500),
+          declared_scope: prompt.slice(0, 500),
+        },
+        session_id,
+      };
+      let decision = 'allow', policy: string | undefined;
+      try { const r = await evaluateCedar(payload); decision = r.decision; policy = r.policy_name; }
+      catch (e: any) { console.error('[CODEX:prompt] cedar', e.message); }
+
+      logDecision({
+        timestamp: ts, session_id, user_email, tool: 'prompt', server: CODING_AGENT,
+        sensitivity: result.sensitivity, effect: decision === 'allow' ? 'Permit' : 'Deny',
+        reason: policy || detection, intent: result.intent || detection,
+        trust_score: trust, scores: result.scores, prompt: prompt.slice(0, 200), agent_type: 'main',
+        ...cedarFields(payload),
+      });
+      console.log(`[CODEX:prompt] ${detection} session=${session_id} inj=${result.scores.injection_score} jb=${result.scores.jailbreak_score} decision=${decision}`);
+    } else {
+      // Clean prompt — classify-only log, enforcement deferred to the tool gate.
+      logDecision({
+        timestamp: ts, session_id, user_email, tool: 'prompt', server: CODING_AGENT,
+        sensitivity: result.sensitivity, effect: 'Permit',
+        reason: 'Prompt classified — enforcement deferred to tool call',
+        intent: result.intent || 'prompt', trust_score: trust, scores: result.scores,
+        prompt: prompt.slice(0, 200), agent_type: 'main',
+      });
     }
 
-    const blocked = decision !== 'allow';
-    logDecision({
-      timestamp: ts, session_id, user_email, tool: 'prompt', server: CODING_AGENT,
-      sensitivity: result.sensitivity, effect: blocked ? 'Deny' : 'Permit',
-      reason: policy || (blocked ? 'Prompt blocked' : 'Prompt allowed'),
-      intent: isInjection ? 'prompt_injection' : (isJailbreak ? 'jailbreak_attempt' : 'prompt'),
-      trust_score: trust, scores: result.scores, prompt: prompt.slice(0, 200), agent_type: 'main',
-      ...cedarFields(payload),
-    });
-
-    console.log(`[CODEX:prompt] session=${session_id} inj=${result.scores.injection_score} jb=${result.scores.jailbreak_score} decision=${decision}`);
-
-    // Codex UserPromptSubmit contract: block with reason, else allow.
-    if (blocked) return res.json({ decision: 'block', reason: `Reva Governance: ${policy || 'prompt blocked by policy'}` });
+    // Never block at prompt time — same as Claude Code.
     return res.json({});
   } catch (e: any) {
     console.error('[CODEX:prompt] error:', e.message);
@@ -213,6 +234,7 @@ router.post('/codex/evaluate', async (req, res) => {
     const tgt    = extractCodexTarget(toolName, toolInput);
     const pipCtx = getPIPContext(user_email);
     const trust  = getPersistentTrust(user_email);
+    const scope  = codexSessionScope.get(session_id) || { declared: '', initial: '' };
 
     // Log raw tool_name so the Codex→action map can be tuned against reality.
     console.log(`[CODEX:tool] raw=${toolName} action=${action} cmd=${(tgt.command || '').slice(0,80)} file=${tgt.filePath} mcp=${tgt.serverName}/${tgt.mcpTool} agent=${agentType}`);
@@ -224,6 +246,7 @@ router.post('/codex/evaluate', async (req, res) => {
           serverName: tgt.serverName || 'mcp', agentType, sessionId: session_id,
           hitlAcknowledged: false, scores: { trust_score: trust }, pipCtx,
           agentId: b.agent_id || undefined, parentSessionId: session_id,
+          declaredScope: scope.declared, initialScope: scope.initial,
         })
       : buildFileOperationPayload({
           osUser: user_email, projectName: project, toolName,
@@ -231,6 +254,7 @@ router.post('/codex/evaluate', async (req, res) => {
           agentType, sessionId: session_id, hitlAcknowledged: false,
           scores: { trust_score: trust }, pipCtx,
           agentId: b.agent_id || undefined, parentSessionId: session_id,
+          declaredScope: scope.declared, initialScope: scope.initial,
         });
 
     // Stamp the Codex discriminators into the Cedar context (rendered verbatim
