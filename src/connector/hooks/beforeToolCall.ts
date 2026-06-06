@@ -270,16 +270,18 @@ export async function handleToolCall(req: Request, res: Response) {
     const enrolledSession   = sessionStore.get(session_id);
     const user_email = osUserFromHeader || osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
 
-    // ── Terminate Session — per-session kill switch keyed by session_id. Checked first;
-    // blocks every tool call in THIS session (including its subagents, which share the
-    // session_id). Permanent: a killed session_id is never restored. ──
-    if (isSessionTerminated(session_id)) {
-      console.log(`[SESSION] Blocked: session=${session_id} — terminated by administrator`);
+    // ── Terminate Session — checked first, blocks everything ──
+    const pipCtxTerm = getPIPContext(user_email);
+    const termHostname = hostnameStore.get(user_email) || req.body?.hostname || enrolledSession?.hostname || 'unknown';
+    const termEmail = pipCtxTerm?.oauth_email || user_email;
+    const terminateKey = `${termEmail}::${termHostname}`;
+    if (isSessionTerminated(terminateKey)) {
+      console.log(`[SESSION] Blocked: ${terminateKey} — session terminated by administrator`);
       return res.json({
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
           permissionDecision: 'deny',
-          permissionDecisionReason: 'Session terminated by administrator. Start a new session to continue.',
+          permissionDecisionReason: 'This session has been terminated by an administrator. Please exit and start a new session to continue.',
         },
         reva: { effect: 'Deny', reason: 'Session terminated by administrator' },
       });

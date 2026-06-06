@@ -11,6 +11,7 @@ import { getOrCreateSessionTrace, evaluateCedar, buildClaudeCodeInjectionPayload
 
 import { subagentContextStore } from './beforeToolCall';
 import { isQuarantined, clip as quarantineClip } from '../../api/quarantine';
+import { isSessionTerminated } from '../../api/sessionControl';
 import { isEnabled } from '../../api/securityConfig';
 
 export const sessionIntentStore = new Map<string, {
@@ -46,6 +47,24 @@ export async function handlePromptSubmit(req: Request, res: Response) {
       || (req.body.user_email as string)
       || (req as any).user?.email
       || 'claude-code-hook@reva.ai';
+
+    // ── Terminate (per-session kill switch) — block the prompt outright so the
+    // developer gets a clear exit message immediately, not just silent tool denials.
+    // Keyed by session_id (same id the live hooks carry). ──
+    if (isSessionTerminated(session_id)) {
+      console.log(`[SESSION] Prompt blocked: session=${session_id} — terminated by administrator`);
+      logDecision({
+        timestamp: new Date().toISOString(), session_id, user_email,
+        tool: 'SubmitPrompt', server: 'claude-code', sensitivity: 'high',
+        effect: 'Deny', reason: 'Session terminated by administrator', intent: 'terminated', agent_type: 'main',
+      });
+      return res.json({
+        decision: 'block',
+        reason: 'This session has been terminated by an administrator. Please exit and start a new session to continue.',
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit' },
+        reva: { effect: 'Deny', reason: 'Session terminated by administrator' },
+      });
+    }
 
     // Detect ! prefix bypass attempts — log only, do NOT fire Cedar
     const isBypassAttempt = prompt.trim().startsWith('!');
