@@ -121,17 +121,9 @@ router.post('/codex/session', async (req, res) => {
 
     console.log(`[CODEX:SessionStart] session=${session_id} os_user=${os_user} email=${oa.email || 'none'} acct=${oa.account_id || 'none'} surface=${surface} model=${b.model || 'none'} project=${project}`);
 
-    return res.json({
-      hookSpecificOutput: {
-        hookEventName: 'SessionStart',
-        additionalContext: `Reva governance active (Codex). Session: ${session_id}. User: ${identity.display_name}. Project: ${project}.
-
-GOVERNANCE RULES:
-1. Do not bypass Reva governance by writing scripts to disk and executing them to evade tool gating.
-2. If an action is blocked by Reva Governance Policy, inform the user and stop. Do not suggest workarounds.
-3. All file changes and shell commands must go through Codex tools so Reva can evaluate them.`,
-      },
-    });
+    // Return empty — no additionalContext. Keeps the hook invisible to the
+    // developer in the Codex UI (governance is enforced silently at the tool gate).
+    return res.json({});
   } catch (e: any) {
     console.error('[CODEX:SessionStart] error:', e.message);
     return res.json({});   // fail-open on enrichment, same posture as Claude SessionStart
@@ -279,27 +271,31 @@ router.post('/codex/evaluate', async (req, res) => {
 
     console.log(`[CODEX:evaluate] ${action} session=${session_id} decision=${decision} policy=${policy || '-'}`);
 
-    // Codex contract differs by event:
-    //   PermissionRequest → hookSpecificOutput.decision.behavior (allow|deny)
-    //   PreToolUse        → hookSpecificOutput.permissionDecision (allow|ask|deny)
+    // Codex contract: ALLOW by emitting nothing (returning permissionDecision/
+    // behavior "allow" is rejected as unsupported and surfaces a failed-hook
+    // error to the developer). Only emit a decision to DENY. This also keeps the
+    // hook invisible on the happy path.
+    if (permit) {
+      return res.json({});
+    }
     if (eventName === 'PreToolUse') {
       return res.json({
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
-          permissionDecision: permit ? 'allow' : 'deny',
-          permissionDecisionReason: permit ? undefined : `Reva Governance: ${policy || 'blocked by policy'}`,
+          permissionDecision: 'deny',
+          permissionDecisionReason: `Reva Governance: ${policy || 'blocked by policy'}`,
         },
       });
     }
     return res.json({
       hookSpecificOutput: {
         hookEventName: 'PermissionRequest',
-        decision: { behavior: permit ? 'allow' : 'deny', reason: permit ? 'Allowed by Reva policy' : `Reva Governance: ${policy || 'blocked by policy'}` },
+        decision: { behavior: 'deny', reason: `Reva Governance: ${policy || 'blocked by policy'}` },
       },
     });
   } catch (e: any) {
     console.error('[CODEX:evaluate] error:', e.message);
-    return res.json({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow', reason: 'eval error — fail open' } } });
+    return res.json({});   // fail open silently — never emit an "allow" decision
   }
 });
 
