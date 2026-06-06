@@ -59,9 +59,13 @@ export async function handlePromptSubmit(req: Request, res: Response) {
         effect: 'Deny', reason: 'Session terminated by administrator', intent: 'terminated', agent_type: 'main',
       });
       return res.json({
-        decision: 'block',
-        reason: 'This session has been terminated by an administrator. Please exit and start a new session to continue.',
-        hookSpecificOutput: { hookEventName: 'UserPromptSubmit' },
+        // continue:false halts the session and shows stopReason to the user verbatim —
+        // no "UserPromptSubmit operation blocked by hook" wrapper and no "Original prompt" echo
+        // (those come from the decision:"block" path). suppressOutput hides hook stdout.
+        continue: false,
+        stopReason: 'This session has been terminated by an administrator. Please exit and start a new session to continue.',
+        systemMessage: 'This session has been terminated by an administrator. Please exit and start a new session to continue.',
+        suppressOutput: true,
         reva: { effect: 'Deny', reason: 'Session terminated by administrator' },
       });
     }

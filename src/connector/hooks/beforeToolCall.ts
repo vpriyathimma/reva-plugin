@@ -278,11 +278,11 @@ export async function handleToolCall(req: Request, res: Response) {
     if (isSessionTerminated(terminateKey)) {
       console.log(`[SESSION] Blocked: ${terminateKey} — session terminated by administrator`);
       return res.json({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason: 'This session has been terminated by an administrator. Please exit and start a new session to continue.',
-        },
+        // continue:false halts the session with a clean user-facing message (no hook wrapper)
+        continue: false,
+        stopReason: 'This session has been terminated by an administrator. Please exit and start a new session to continue.',
+        systemMessage: 'This session has been terminated by an administrator. Please exit and start a new session to continue.',
+        suppressOutput: true,
         reva: { effect: 'Deny', reason: 'Session terminated by administrator' },
       });
     }
