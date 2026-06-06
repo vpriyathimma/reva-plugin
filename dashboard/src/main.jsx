@@ -158,6 +158,7 @@ function normTool(t) {
 function deriveAll(s) {
   const qList = s.quarantine.quarantined || [];
   const cappedSessions = new Set(s.quarantine.capped_sessions || []);
+  const termIds = new Set(s.terminated || []);  // terminated session_ids (per-session kill switch)
   // Match a quarantine record against any of a developer's identity forms.
   const quarantineFor = (u, sess) => {
     const cands = new Set([u, sess.user_email, sess.oauth_email,
@@ -190,6 +191,10 @@ function deriveAll(s) {
   const roster = [];
   for (const [u, sessions] of byUser) {
     const latest = sessions[sessions.length - 1];
+    // Identity fields are developer-level: source from the first session that has them so they
+    // stay stable and never blank/flip as new sessions arrive from other surfaces.
+    const firstNonEmpty = (k) => { for (const x of sessions) { if (x[k]) return x[k]; } return ""; };
+    const stableSpiffe = firstNonEmpty("spiffe_id");  // SPIFFE/SVID: once issued, stays static for the lifecycle
     const trust = (s.trust[u] && s.trust[u].trust != null) ? s.trust[u].trust
       : (s.trust[latest.user_email] && s.trust[latest.user_email].trust != null) ? s.trust[latest.user_email].trust : 70;
     const qRec = quarantineFor(u, latest);
@@ -201,13 +206,13 @@ function deriveAll(s) {
     const tools = Array.from(new Set((latest.tools || []).map((t) => t.tool_name || t.name).filter(Boolean))).slice(0, 6);
     roster.push({
       id: principalOf(u), kind: "dev",
-      email: latest.oauth_email || latest.user_email || u,
+      email: firstNonEmpty("oauth_email") || firstNonEmpty("user_email") || u,
       model: latest.model || "—",
       os: latest.os_type || latest.remote_os || "—",
-      sessions: sessions.length, trust, state, owner: u,
+      sessions: sessions.filter((x) => !termIds.has(x.session_id)).length, trust, state, owner: u,
       quarantine: qRec ? { osUser: qRec.osUser, policyId: qRec.policyId, policyName: qRec.policyName, resolution: qRec.resolution, message: qRec.message, status: qRec.status, since: qRec.since } : null,
-      svid: latest.spiffe_id || ("agent-hash:" + (latest.session_id || "").slice(0, 8) + " (fallback)"),
-      svidFallback: !latest.spiffe_id,
+      svid: stableSpiffe || ("agent-hash:" + (latest.session_id || "").slice(0, 8) + " (fallback)"),
+      svidFallback: !stableSpiffe,
       // developer-detail fields
       hostname: latest.hostname || "—",
       gitBranch: latest.git_branch || "",
@@ -215,8 +220,8 @@ function deriveAll(s) {
       project: latest.project_name || "",
       connectionType: latest.connection_type || "local",
       sshClientIp: latest.ssh_client_ip || "",
-      accountUuid: latest.account_uuid || "",
-      orgUuid: latest.org_uuid || "",
+      accountUuid: firstNonEmpty("account_uuid"),
+      orgUuid: firstNonEmpty("org_uuid"),
       jiraTicket: latest.jira_ticket_id || "",
       enrolledAt: latest.enrolled_at || "",
       sessionsList: sessions,
@@ -1388,21 +1393,8 @@ function AgentDetail({ row }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <Field label="Authenticated As">{row.email}</Field>
           <Field label="Owner">{row.owner}</Field>
-          <Field label="Operating System">{row.os}</Field>
-          <Field label="Hostname" mono>{row.hostname}</Field>
-          <Field label="Model" mono>{row.model}</Field>
           <Field label="Active Sessions">{row.sessions}</Field>
-          <Field label="Connection">{row.connectionType === "ssh" ? `SSH${row.sshClientIp ? " · " + row.sshClientIp : ""}` : "Local"}</Field>
-          {row.project ? <Field label="Project" mono>{row.project}</Field> : null}
         </div>
-
-        {(row.gitBranch || row.gitRemote) && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            {row.gitBranch ? <Field label="Git Branch" mono>{row.gitBranch}</Field> : null}
-            {row.jiraTicket ? <Field label="Jira Ticket" mono>{row.jiraTicket}</Field> : null}
-            {row.gitRemote ? <div style={{ gridColumn: "1 / -1" }}><Field label="Git Remote" mono>{row.gitRemote}</Field></div> : null}
-          </div>
-        )}
 
         <Field label={row.svidFallback ? "Agent ID (SVID fallback)" : "SPIFFE / SVID"} mono>{row.svid}</Field>
         {row.svidFallback && <div className="help" style={{ marginTop: -10, color: "var(--amber-ink)" }}>No SVID issued — using agent-hash fallback.</div>}
@@ -1441,10 +1433,11 @@ function SessionsPanel({ row, terminated }) {
       <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
         {sessions.length === 0 && <div className="help" style={{ textAlign: "center", padding: 20 }}>No active sessions.</div>}
         {sessions.map((sx) => {
-          const key = `${sx.oauth_email || sx.user_email}::${sx.hostname || "unknown"}`;
-          const isTerm = termSet.has(key);
+          const isTerm = termSet.has(sx.session_id);
+          const conn = sx.entrypoint === "remote" ? "Browser" : (sx.connection_type === "ssh" ? "SSH" : "Local");
+          const os = sx.os_type || sx.remote_os || "";
           return (
-            <div key={sx.session_id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface-2)" }}>
+            <div key={sx.session_id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface-2)", opacity: isTerm ? 0.62 : 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span className="mono" style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)" }}>{String(sx.session_id || "").slice(0, 14)}</span>
                 {isTerm
@@ -1454,17 +1447,19 @@ function SessionsPanel({ row, terminated }) {
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 9 }}>
                 {sx.entrypoint ? <span className="help">surface: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.entrypoint}</span></span> : null}
+                <span className="help">connection: <span className="mono" style={{ color: "var(--ink-2)" }}>{conn}</span></span>
+                {os ? <span className="help">os: <span className="mono" style={{ color: "var(--ink-2)" }}>{os}</span></span> : null}
                 {sx.hostname ? <span className="help">host: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.hostname}</span></span> : null}
+                {sx.model ? <span className="help">model: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.model}</span></span> : null}
                 {sx.project_name ? <span className="help">project: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.project_name}</span></span> : null}
                 {sx.git_branch ? <span className="help">branch: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.git_branch}</span></span> : null}
-                <span className="help">{sx.connection_type === "ssh" ? "SSH" : "local"}</span>
+                {sx.git_remote_url ? <span className="help">remote: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.git_remote_url}</span></span> : null}
+                {conn === "SSH" && sx.ssh_client_ip ? <span className="help">ssh ip: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.ssh_client_ip}</span></span> : null}
+                {sx.jira_ticket_id ? <span className="help">jira: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.jira_ticket_id}</span></span> : null}
               </div>
-              <button
-                className="btn btn-sm"
-                style={{ marginTop: 11, width: "100%", background: "#fff", color: isTerm ? "var(--blue-700)" : "var(--red)", border: `1px solid ${isTerm ? "var(--border-strong)" : "#F5C2C2"}` }}
-                onClick={() => revaTerminateSession(key, !isTerm)}>
-                {isTerm ? "Restore session" : "Terminate session"}
-              </button>
+              {isTerm
+                ? <button className="btn btn-sm" disabled style={{ marginTop: 11, width: "100%", background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)", cursor: "default" }}>Terminated</button>
+                : <button className="btn btn-sm" style={{ marginTop: 11, width: "100%", background: "#fff", color: "var(--red)", border: "1px solid #F5C2C2" }} onClick={() => revaTerminateSession(sx.session_id, true)}>Terminate session</button>}
             </div>
           );
         })}
