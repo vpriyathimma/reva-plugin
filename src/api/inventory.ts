@@ -147,6 +147,8 @@ router.get('/sessions', (_req, res) => {
     ssh_client_ip:     s.ssh_client_ip    || '',
     remote_os:         s.remote_os        || '',
     entrypoint:        s.entrypoint       || '',
+    coding_agent:      s.coding_agent     || 'claude-code',
+    surface:           s.surface          || '',
   }));
   res.json({ sessions, total: sessions.length });
 });

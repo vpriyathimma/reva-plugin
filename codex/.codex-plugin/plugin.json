@@ -1,0 +1,17 @@
+{
+  "name": "reva-governance-codex",
+  "version": "1.0.0",
+  "description": "Reva AI governance for OpenAI Codex \u2014 Cedar-enforced access control for every Codex tool call and prompt. Shares the Reva PDP backend with the Claude Code plugin.",
+  "author": {
+    "name": "Reva AI"
+  },
+  "interface": {
+    "displayName": "Reva Governance (Codex)",
+    "shortDescription": "Cedar-enforced governance for Codex",
+    "category": "Security",
+    "capabilities": [
+      "Read",
+      "Write"
+    ]
+  }
+}

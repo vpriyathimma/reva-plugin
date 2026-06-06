@@ -189,7 +189,12 @@ function deriveAll(s) {
   });
 
   const roster = [];
-  for (const [u, sessions] of byUser) {
+  for (const [u, allSessions] of byUser) {
+   // One roster row per (developer, coding agent): the same developer appears
+   // twice when they use both Claude Code and Codex.
+   const byAgent = new Map();
+   allSessions.forEach((x) => { const ca = x.coding_agent || "claude-code"; if (!byAgent.has(ca)) byAgent.set(ca, []); byAgent.get(ca).push(x); });
+   for (const [codingAgent, sessions] of byAgent) {
     const latest = sessions[sessions.length - 1];
     // Identity fields are developer-level: source from the first session that has them so they
     // stay stable and never blank/flip as new sessions arrive from other surfaces.
@@ -205,7 +210,7 @@ function deriveAll(s) {
     const recent = (decByUser.get(u) || []).slice(0, 3).map((d) => ({ t: relTime(d.timestamp), a: normTool(d.tool), e: d.effect, r: d.reason || "" }));
     const tools = Array.from(new Set((latest.tools || []).map((t) => t.tool_name || t.name).filter(Boolean))).slice(0, 6);
     roster.push({
-      id: principalOf(u), kind: "dev",
+      id: principalOf(u) + "#" + codingAgent, principal: principalOf(u), codingAgent, surface: latest.surface || "", kind: "dev",
       email: firstNonEmpty("oauth_email") || firstNonEmpty("user_email") || u,
       model: latest.model || "—",
       os: latest.os_type || latest.remote_os || "—",
@@ -231,6 +236,7 @@ function deriveAll(s) {
       gh: "brokered",
       decisions: recent.length ? recent : [{ t: "", a: "—", e: "Permit", r: "No recent decisions" }],
     });
+   }
   }
 
   // KPIs
@@ -1265,7 +1271,7 @@ function RosterTable({ rows, selectedId, onSelect }) {
       <table className="tbl">
         <thead>
           <tr>
-            <th>Identity</th><th>Authenticated As</th><th>Model</th><th>OS</th>
+            <th>Identity</th><th>Authenticated As</th><th>Coding Agent</th><th>Model</th><th>OS</th>
             <th className="right">Sess.</th><th>Trust</th><th>State</th><th></th>
           </tr>
         </thead>
@@ -1278,10 +1284,11 @@ function RosterTable({ rows, selectedId, onSelect }) {
                     background: r.kind === "dev" ? "var(--blue-tint)" : "var(--purple-tint)", color: r.kind === "dev" ? "var(--blue-700)" : "var(--purple)" }}>
                     <Icon name={r.kind === "dev" ? "user" : "bot"} size={15} />
                   </span>
-                  <span className="mono" style={{ fontSize: 12, color: "var(--ink)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.id}</span>
+                  <span className="mono" style={{ fontSize: 12, color: "var(--ink)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.principal || r.id}</span>
                 </div>
               </td>
               <td className="sub">{r.email}</td>
+              <td><span className="mono" style={{ fontSize: 11, padding: "2px 7px", borderRadius: 6, background: r.codingAgent === "codex" ? "var(--purple-tint)" : "var(--blue-tint)", color: r.codingAgent === "codex" ? "var(--purple)" : "var(--blue-700)" }}>{r.codingAgent === "codex" ? "Codex" : "Claude Code"}</span></td>
               <td><span className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)" }}>{r.model}</span></td>
               <td className="sub">{r.os}</td>
               <td className="right mono" style={{ fontWeight: 600 }}>{r.sessions}</td>
@@ -1291,7 +1298,7 @@ function RosterTable({ rows, selectedId, onSelect }) {
             </tr>
           ))}
           {rows.length === 0 && (
-            <tr><td colSpan={8} style={{ textAlign: "center", padding: "40px 0", color: "var(--ink-4)" }}>No identities match this filter.</td></tr>
+            <tr><td colSpan={9} style={{ textAlign: "center", padding: "40px 0", color: "var(--ink-4)" }}>No identities match this filter.</td></tr>
           )}
         </tbody>
       </table>
@@ -1359,7 +1366,7 @@ function AgentDetail({ row }) {
         </span>
         <div style={{ minWidth: 0 }}>
           <div className="section-title" style={{ fontSize: 14.5 }}>Developer Details</div>
-          <div className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.id}</div>
+          <div className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.principal || row.id}</div>
         </div>
       </div>
 
@@ -1399,10 +1406,11 @@ function AgentDetail({ row }) {
         <Field label={row.svidFallback ? "Agent ID (SVID fallback)" : "SPIFFE / SVID"} mono>{row.svid}</Field>
         {row.svidFallback && <div className="help" style={{ marginTop: -10, color: "var(--amber-ink)" }}>No SVID issued — using agent-hash fallback.</div>}
 
+        <Field label="Coding Agent">{row.codingAgent === "codex" ? "Codex" : "Claude Code"}{row.surface ? " · " + row.surface : ""}</Field>
         {(row.accountUuid || row.orgUuid) && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {row.accountUuid ? <Field label="Anthropic Account ID" mono>{row.accountUuid}</Field> : null}
-            {row.orgUuid ? <Field label="Anthropic Org ID" mono>{row.orgUuid}</Field> : null}
+            {row.accountUuid ? <Field label={(row.codingAgent === "codex" ? "OpenAI" : "Anthropic") + " Account ID"} mono>{row.accountUuid}</Field> : null}
+            {row.orgUuid ? <Field label={(row.codingAgent === "codex" ? "OpenAI" : "Anthropic") + " Org ID"} mono>{row.orgUuid}</Field> : null}
           </div>
         )}
       </div>

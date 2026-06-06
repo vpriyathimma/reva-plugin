@@ -97,6 +97,10 @@ app.use('/api', inventoryRouter);
 app.use('/api', pdpRouter);
 app.use('/api', testIdjagRouter);
 
+// ── Codex governance router (additive — reuses the same PDP engine; /api/codex/*) ──
+import codexPdpRouter from './api/codexPdp';
+app.use('/api', codexPdpRouter);
+
 // HITL routes
 import { hitlRouter } from './api/hitlConfig';
 app.use('/api', hitlRouter);

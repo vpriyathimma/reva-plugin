@@ -37,6 +37,11 @@ export interface EnrolledSession {
   remote_os?:         string;
   // Surface / entrypoint — raw CLAUDE_CODE_ENTRYPOINT value (e.g. cli | claude-vscode | claude-desktop | remote), forwarded verbatim
   entrypoint?:        string;
+  // Coding agent that produced this session — 'claude-code' (default) | 'codex'.
+  // Additive: Claude path never sets it; absence is treated as 'claude-code'.
+  coding_agent?:      string;
+  // Codex client surface — codex_cli | codex_vscode | codex_exec | … (from originator)
+  surface?:           string;
 }
 
 // In-memory session store
@@ -79,7 +84,7 @@ export function enrollSession(
   session_id: string,
   user_email: string,
   tools: ClassifiedTool[],
-  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; user_id?: string; github_repo_paths?: Record<string, string[]>; git_email?: string; git_name?: string; git_branch?: string; git_remote_url?: string; jira_ticket_id?: string; connection_type?: string; ssh_client_ip?: string; remote_os?: string; entrypoint?: string }
+  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; user_id?: string; github_repo_paths?: Record<string, string[]>; git_email?: string; git_name?: string; git_branch?: string; git_remote_url?: string; jira_ticket_id?: string; connection_type?: string; ssh_client_ip?: string; remote_os?: string; entrypoint?: string; coding_agent?: string; surface?: string }
 ): EnrolledSession {
   const uniqueServers = [...new Set(tools.map(t => t.server_name))];
 
@@ -114,6 +119,8 @@ export function enrollSession(
     ssh_client_ip:         extra?.ssh_client_ip,
     remote_os:             extra?.remote_os,
     entrypoint:            extra?.entrypoint,
+    coding_agent:          extra?.coding_agent,
+    surface:               extra?.surface,
   };
 
   sessionStore.set(session_id, session);
