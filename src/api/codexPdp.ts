@@ -33,7 +33,7 @@ import {
 } from './pdpEvaluate';
 import { logDecision, enrollSession } from '../connector/discovery/enroll';
 import { getPIPContext, enrichSession as enrichPIP } from './pip';
-import { classifyPrompt, recordBlock, getPersistentTrust } from './intentClassifier';
+import { classifyPrompt, recordBlock, getPersistentTrust, checkIntentDrift } from './intentClassifier';
 import { resolveSession } from './sessionResolver';
 import { isEnabled } from './securityConfig';
 import { mapCodexToolToAction, extractCodexTarget, isBashAction, CODING_AGENT } from '../connector/codex/adapter';
@@ -225,8 +225,6 @@ router.post('/codex/evaluate', async (req, res) => {
 
     const tgt    = extractCodexTarget(toolName, toolInput);
     let   action = mapCodexToolToAction(toolName);
-    // apply_patch granularity: Add File → WriteFile (create), Delete File →
-    // destructive edit (the rm-bypass vector), Update File → EditFile.
     // apply_patch granularity: Add File → WriteFile (create), Update File → EditFile.
     if (action === 'EditFile' && tgt.operation === 'add') action = 'WriteFile';
     const pipCtx = getPIPContext(user_email);
@@ -237,6 +235,32 @@ router.post('/codex/evaluate', async (req, res) => {
     console.log(`[CODEX:tool] raw=${toolName} action=${action} op=${tgt.operation || '-'} cmd=${(tgt.command || '').slice(0,80)} file=${tgt.filePath} mcp=${tgt.serverName}/${tgt.mcpTool} agent=${agentType}`);
 
     const isMCP = action === 'MCPRead' || action === 'MCPWrite' || action === 'MCPExecute';
+
+    // Intent drift — reuse the SAME model Claude uses (checkIntentDrift), translating
+    // the Codex action into the classifier's tool vocabulary so mutate-vs-read is
+    // judged identically (apply_patch→edit/write, shell→bash, reads→read). Gated by
+    // the same 'intent_drift' toggle. Previously unwired, so is_intent_drift defaulted
+    // to false and the PDP never saw Codex drift → out-of-scope reads were allowed.
+    const driftTarget = isBashAction(action) ? (tgt.command || '') : (tgt.filePath || tgt.mcpTool || '');
+    const driftTool   = isBashAction(action) ? 'bash'
+                      : action === 'WriteFile' ? 'write'
+                      : action === 'EditFile'  ? 'edit'
+                      : action === 'ReadFile'  ? 'read'
+                      : toolName;
+    const drift = (isEnabled('intent_drift') && !isMCP)
+      ? checkIntentDrift({ target: driftTarget, tool_name: driftTool, declared_scope: scope.declared, initial_scope: scope.initial })
+      : { is_intent_drift: false, intent_drift_score: 0, reduces_trust: false };
+    if (drift.is_intent_drift) {
+      // Mirror Claude: drastic drift (mutate when only a read was asked) erodes trust;
+      // scope drift (out-of-scope read) is contained by Cedar with no trust hit.
+      if (drift.reduces_trust) {
+        const blk = { type: 'intent_drift' as const, prompt: driftTarget.slice(0, 200), score: drift.intent_drift_score, timestamp: new Date().toISOString() };
+        recordBlock(user_email, blk);
+        if (b.agent_id && agentType === 'subagent') recordBlock(`${user_email}:${b.agent_id}`, blk);
+      }
+      console.log(`[CODEX:drift] agent=${agentType} score=${drift.intent_drift_score} asked="${(scope.declared || scope.initial).slice(0,50)}" target="${driftTarget.slice(0,60)}"`);
+    }
+
     const payload = isMCP
       ? buildMCPToolPayload({
           osUser: user_email, projectName: project, toolName: tgt.mcpTool || toolName,
@@ -249,6 +273,7 @@ router.post('/codex/evaluate', async (req, res) => {
           osUser: user_email, projectName: project, toolName,
           filePath: tgt.filePath, command: isBashAction(action) ? tgt.command : undefined,
           agentType, sessionId: session_id, hitlAcknowledged: false,
+          isIntentDrift: drift.is_intent_drift, intentDriftScore: drift.intent_drift_score,
           scores: { trust_score: trust }, pipCtx,
           agentId: b.agent_id || undefined, parentSessionId: session_id,
           declaredScope: scope.declared, initialScope: scope.initial,
