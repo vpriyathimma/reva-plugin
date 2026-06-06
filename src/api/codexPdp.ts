@@ -25,6 +25,7 @@ import { Router, Request, Response } from 'express';
 
 import {
   evaluateCedar,
+  buildClaudeCodeInjectionPayload,
   buildFileOperationPayload,
   buildMCPToolPayload,
   getOrCreateSessionTrace,
@@ -222,14 +223,18 @@ router.post('/codex/evaluate', async (req, res) => {
     const agentType  = b.agent_id ? 'subagent' : 'main';
     const ts = new Date().toISOString();
 
-    const action = mapCodexToolToAction(toolName);
     const tgt    = extractCodexTarget(toolName, toolInput);
+    let   action = mapCodexToolToAction(toolName);
+    // apply_patch granularity: Add File → WriteFile (create), Delete File →
+    // destructive edit (the rm-bypass vector), Update File → EditFile.
+    // apply_patch granularity: Add File → WriteFile (create), Update File → EditFile.
+    if (action === 'EditFile' && tgt.operation === 'add') action = 'WriteFile';
     const pipCtx = getPIPContext(user_email);
     const trust  = getPersistentTrust(user_email);
     const scope  = codexSessionScope.get(session_id) || { declared: '', initial: '' };
 
-    // Log raw tool_name so the Codex→action map can be tuned against reality.
-    console.log(`[CODEX:tool] raw=${toolName} action=${action} cmd=${(tgt.command || '').slice(0,80)} file=${tgt.filePath} mcp=${tgt.serverName}/${tgt.mcpTool} agent=${agentType}`);
+    // Log raw tool_name + operation so the map can be tuned + deletes are visible.
+    console.log(`[CODEX:tool] raw=${toolName} action=${action} op=${tgt.operation || '-'} cmd=${(tgt.command || '').slice(0,80)} file=${tgt.filePath} mcp=${tgt.serverName}/${tgt.mcpTool} agent=${agentType}`);
 
     const isMCP = action === 'MCPRead' || action === 'MCPWrite' || action === 'MCPExecute';
     const payload = isMCP
@@ -313,8 +318,48 @@ router.post('/codex/posttool', async (req, res) => {
     const result = classifyPrompt(out, session_id, user_email);
     if (result.scores.injection_score > 50 || result.scores.jailbreak_score > 50) {
       const ts = new Date().toISOString();
+      const isSub = !!b.agent_id;
+      // Best-effort source file that carried the payload (e.g. the doc the agent read).
+      const srcTgt = extractCodexTarget(b.tool_name || '', b.tool_input || {});
+      const sourcePath = srcTgt.filePath || '';
       recordBlock(user_email, { type: 'prompt_injection', prompt: out.slice(0, 200), score: result.scores.injection_score, timestamp: ts });
-      logDecision({ timestamp: ts, session_id, user_email, tool: 'prompt', server: CODING_AGENT, sensitivity: result.sensitivity, effect: 'Deny', reason: 'prompt injection detected in tool output', intent: 'prompt_injection_in_read', trust_score: getPersistentTrust(user_email), scores: result.scores, agent_type: b.agent_id ? 'subagent' : 'main' });
+
+      // Send to the PDP as a SubmitPrompt (is_injection) — same primitive Claude's
+      // read-injection path uses — so it lands in AVP, not just the local feed.
+      const payload = buildClaudeCodeInjectionPayload({
+        osUser: user_email,
+        projectName: b.project_name || b.cwd || '',
+        sessionId: session_id,
+        prompt: out,
+        promptHistory: [],
+        isInjection: result.scores.injection_score > 50,
+        isJailbreak: result.scores.jailbreak_score > 50,
+        scores: result.scores,
+        trustScore: getPersistentTrust(user_email),
+        pipCtx: getPIPContext(user_email),
+        agentType: isSub ? 'subagent' : 'main',
+        agentId: b.agent_id || '',
+        agentName: isSub ? 'subagent' : 'main',
+        parentSessionId: isSub ? (b.parent_session_id || session_id) : '',
+        sourcePath,
+      });
+      (payload as any).context.coding_agent = CODING_AGENT;
+
+      let decision = 'allow', policy: string | undefined;
+      try { const r = await evaluateCedar(payload); decision = r.decision; policy = r.policy_name; }
+      catch (e: any) { console.error('[CODEX:posttool] cedar', e.message); }
+
+      logDecision({
+        timestamp: ts, session_id, user_email,
+        tool: 'SubmitPrompt', server: CODING_AGENT, sensitivity: result.sensitivity,
+        effect: decision === 'allow' ? 'Permit' : 'Deny',
+        reason: policy || 'prompt injection detected in tool output',
+        intent: 'prompt_injection_in_read',
+        trust_score: getPersistentTrust(user_email),
+        scores: result.scores, agent_type: isSub ? 'subagent' : 'main',
+        ...cedarFields(payload),
+      });
+      console.log(`[CODEX:posttool] injection→PDP session=${session_id} decision=${decision} policy=${policy || '-'} src=${sourcePath}`);
     }
     return res.json({});
   } catch (e: any) { console.error('[CODEX:posttool]', e.message); return res.json({}); }

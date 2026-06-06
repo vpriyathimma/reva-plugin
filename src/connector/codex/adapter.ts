@@ -59,8 +59,11 @@ export function isBashAction(action: string): boolean {
 
 // Best-effort extraction of the governed target (command for shell, file path
 // for apply_patch) from Codex's free-form tool_input. Never throws.
-export function extractCodexTarget(toolName: string, toolInput: any): { command: string; filePath: string; serverName: string; mcpTool: string } {
-  const out = { command: '', filePath: '', serverName: '', mcpTool: '' };
+// Also detects the apply_patch operation: 'add' | 'update' | 'delete' — critical
+// because apply_patch can DELETE files, which an agent will use to route around a
+// blocked `rm`. Deletes must be classified destructive, not a benign edit.
+export function extractCodexTarget(toolName: string, toolInput: any): { command: string; filePath: string; serverName: string; mcpTool: string; operation: string } {
+  const out = { command: '', filePath: '', serverName: '', mcpTool: '', operation: '' };
   const t = (toolName || '').toLowerCase();
   try {
     // Shell — command may be a string or an argv array
@@ -68,14 +71,26 @@ export function extractCodexTarget(toolName: string, toolInput: any): { command:
     if (cmd != null) {
       out.command = Array.isArray(cmd) ? cmd.join(' ') : String(cmd);
     }
-    // apply_patch — pull the first file path out of the patch envelope
+    // apply_patch — pull the operation + first file path out of the patch envelope
     const patch = toolInput?.input ?? toolInput?.patch ?? '';
-    if (!out.filePath && typeof patch === 'string' && patch) {
-      const m = patch.match(/\*\*\*\s+(?:Add|Update|Delete) File:\s*(.+)/i);
-      if (m) out.filePath = m[1].trim();
+    if (typeof patch === 'string' && patch) {
+      const m = patch.match(/\*\*\*\s+(Add|Update|Delete)\s+File:\s*(.+)/i);
+      if (m) {
+        out.operation = m[1].toLowerCase();   // add | update | delete
+        if (!out.filePath) out.filePath = m[2].trim();
+      }
     }
     // Explicit path fields
     if (!out.filePath) out.filePath = String(toolInput?.path ?? toolInput?.file_path ?? toolInput?.file ?? '');
+    // Some shapes pass an explicit delete flag / op
+    if (!out.operation) {
+      const op = String(toolInput?.operation ?? toolInput?.op ?? toolInput?.type ?? '').toLowerCase();
+      if (op.includes('delete') || op.includes('remove')) out.operation = 'delete';
+    }
+    // Shell deletes (rm / unlink / shred / git rm) — surface as destructive intent too
+    if (!out.operation && out.command && /\b(rm|unlink|shred|trash)\b|\bgit\s+rm\b/.test(out.command)) {
+      out.operation = 'delete';
+    }
     // MCP — Codex passes server + tool when calling an MCP tool
     out.serverName = String(toolInput?.server ?? toolInput?.server_name ?? '');
     if (t.startsWith('mcp__')) {
