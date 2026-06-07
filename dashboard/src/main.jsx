@@ -1467,6 +1467,15 @@ function AgentDetail({ row }) {
         {row.svidFallback && <div className="help" style={{ marginTop: -10, color: "var(--amber-ink)" }}>No SVID issued — using agent-hash fallback.</div>}
 
         <Field label="Coding Agent">{row.codingAgent === "codex" ? "Codex" : row.codingAgent === "kiro" ? "Kiro" : "Claude Code"}{row.surface ? " · " + row.surface : ""}</Field>
+        <Field label="McpServers">
+          {(row.mcp && row.mcp.length) ? (
+            <span style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {row.mcp.map((m) => (
+                <span key={m} className="mono" style={{ fontSize: 11.5, padding: "3px 9px", borderRadius: 6, background: "var(--blue-tint)", color: "var(--blue-700)", border: "1px solid var(--border)", fontWeight: 600 }}>{m}</span>
+              ))}
+            </span>
+          ) : <span style={{ color: "var(--ink-3)" }}>—</span>}
+        </Field>
         {row.codingAgent === "kiro" && (row.kiroAccountType || row.kiroEmail || row.kiroRegion || row.kiroStartUrl || row.kiroProfileArn) && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#FF9900", textTransform: "uppercase", letterSpacing: "0.4px", marginTop: 8 }}>Kiro Identity (AWS)</div>

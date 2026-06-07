@@ -725,7 +725,7 @@ insightsRouter.get('/insights/summary', (req, res) => {
 // ---- Developer detail ----
 //   GET /api/identities/:authenticatedAs/identity
 //   GET /api/identities/:authenticatedAs/sessions
-//   GET /api/identities/:spiffeId/jit
+//   GET /api/identities/jit?spiffeId=<spiffe id>
 insightsRouter.get('/identities/:authenticatedAs/identity', (req, res) => {
   const row = rowByEmail(buildRoster(), req.params.authenticatedAs);
   if (!row) return res.status(404).json({ error: 'identity not found', authenticatedAs: req.params.authenticatedAs });
@@ -738,28 +738,65 @@ insightsRouter.get('/identities/:authenticatedAs/sessions', (req, res) => {
   res.json(detailSessions(row));
 });
 
-insightsRouter.get('/identities/:spiffeId/jit', (req, res) => {
-  const row = rowBySpiffe(buildRoster(), req.params.spiffeId);
-  if (!row) return res.status(404).json({ error: 'identity not found', spiffeId: req.params.spiffeId });
+insightsRouter.get('/identities/jit', (req, res) => {
+  const spiffeId = req.query.spiffeId ? String(req.query.spiffeId) : '';
+  if (!spiffeId) return res.status(400).json({ error: 'spiffeId query param required', example: '/api/identities/jit?spiffeId=spiffe://reva.ai/agent/claude-code/dev/<uuid>' });
+  const row = rowBySpiffe(buildRoster(), spiffeId);
+  if (!row) return res.status(404).json({ error: 'identity not found', spiffeId });
   res.json(detailJit(row));
 });
 
+// ---- Decisions list — the source of the unique per-decision id ----
+// Each decision's unique handle is `decisionId` ("dec_<n>", stable for the
+// process). `cedarDecisionId` (the PDP-issued UUID) is also surfaced when the
+// decision was evaluated by Cedar. Feed either into /api/intent-profile.
+insightsRouter.get('/insights/decisions', (req, res) => {
+  const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 100;
+  const list = decisionLog.map((d, i) => ({
+    decisionId: 'dec_' + i,
+    cedarDecisionId: d.cedar_decision_id || null,
+    trace: traceSlug(d.session_id),
+    sessionId: d.session_id,
+    timestamp: d.timestamp,
+    tool: d.tool,
+    effect: d.effect,
+    intent: d.intent || '',
+    reason: d.reason || '',
+  })).reverse().slice(0, Math.max(1, limit));
+  res.json({ section: 'Decisions', total: decisionLog.length, count: list.length, decisions: list });
+});
+
 // ---- Intent profile ----
+// Target one decision by (in priority order):
+//   ?id=dec_<n>            unique decision id (from /api/insights/decisions)
+//   ?cedarDecisionId=<uuid> PDP decision id (Cedar-evaluated decisions only)
+//   ?session=<id>&seq=<n>  the Nth decision in a session (default: latest)
+//   ?trace=trc_<8>         dashboard trace slug
+//   (none)                 most recent decision
 insightsRouter.get('/intent-profile', (req, res) => {
+  const id = req.query.id ? String(req.query.id) : '';
+  const cedarId = req.query.cedarDecisionId ? String(req.query.cedarDecisionId) : '';
   const trace = req.query.trace ? String(req.query.trace) : '';
   const session = req.query.session ? String(req.query.session) : '';
   const seq = req.query.seq != null ? parseInt(String(req.query.seq), 10) : NaN;
 
-  let target: DecisionLog | undefined;
-  if (session) {
-    const matches = decisionLog.filter((d) => d.session_id === session);
-    target = !isNaN(seq) ? matches[seq] : matches[matches.length - 1];
+  let idx = -1;
+  if (id) {
+    const m = /^dec_(\d+)$/.exec(id);
+    if (m) idx = parseInt(m[1], 10);
+  } else if (cedarId) {
+    idx = decisionLog.findIndex((d) => d.cedar_decision_id === cedarId);
+  } else if (session) {
+    const matches: number[] = [];
+    decisionLog.forEach((d, i) => { if (d.session_id === session) matches.push(i); });
+    idx = !isNaN(seq) ? matches[seq] : matches[matches.length - 1];
   } else if (trace) {
-    target = [...decisionLog].reverse().find((d) => traceSlug(d.session_id) === trace);
+    for (let i = decisionLog.length - 1; i >= 0; i--) { if (traceSlug(decisionLog[i].session_id) === trace) { idx = i; break; } }
   } else {
-    target = decisionLog[decisionLog.length - 1];
+    idx = decisionLog.length - 1;
   }
 
-  if (!target) return res.status(404).json({ error: 'no matching decision', trace, session });
-  res.json(ipCompute(target));
+  const target = idx >= 0 ? decisionLog[idx] : undefined;
+  if (!target) return res.status(404).json({ error: 'no matching decision', id, cedarDecisionId: cedarId, trace, session });
+  res.json({ decisionId: 'dec_' + idx, cedarDecisionId: target.cedar_decision_id || null, ...ipCompute(target) });
 });
