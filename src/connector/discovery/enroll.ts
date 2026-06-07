@@ -42,6 +42,12 @@ export interface EnrolledSession {
   coding_agent?:      string;
   // Codex client surface — codex_cli | codex_vscode | codex_exec | … (from originator)
   surface?:           string;
+  // Kiro identity — all fields from `kiro-cli whoami --format json`, stored verbatim
+  kiro_account_type?: string;   // "BuilderId" | "IdentityCenter" | "Social"
+  kiro_email?:        string;
+  kiro_region?:       string;   // e.g. "us-east-1"
+  kiro_start_url?:    string;   // Identity Center start URL
+  kiro_profile_arn?:  string;   // Identity Center profile ARN
 }
 
 // In-memory session store
@@ -84,7 +90,7 @@ export function enrollSession(
   session_id: string,
   user_email: string,
   tools: ClassifiedTool[],
-  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; user_id?: string; github_repo_paths?: Record<string, string[]>; git_email?: string; git_name?: string; git_branch?: string; git_remote_url?: string; jira_ticket_id?: string; connection_type?: string; ssh_client_ip?: string; remote_os?: string; entrypoint?: string; coding_agent?: string; surface?: string }
+  extra?: { agent_id?: string; os_type?: string; hostname?: string; model?: string; mcp_servers_discovered?: string[]; project_name?: string; spiffe_id?: string; spire_entry_id?: string; oauth_email?: string; developer_name?: string; account_uuid?: string; org_uuid?: string; user_id?: string; github_repo_paths?: Record<string, string[]>; git_email?: string; git_name?: string; git_branch?: string; git_remote_url?: string; jira_ticket_id?: string; connection_type?: string; ssh_client_ip?: string; remote_os?: string; entrypoint?: string; coding_agent?: string; surface?: string; kiro_account_type?: string; kiro_email?: string; kiro_region?: string; kiro_start_url?: string; kiro_profile_arn?: string }
 ): EnrolledSession {
   const uniqueServers = [...new Set(tools.map(t => t.server_name))];
 
@@ -121,6 +127,11 @@ export function enrollSession(
     entrypoint:            extra?.entrypoint,
     coding_agent:          extra?.coding_agent,
     surface:               extra?.surface,
+    kiro_account_type:     extra?.kiro_account_type,
+    kiro_email:            extra?.kiro_email,
+    kiro_region:           extra?.kiro_region,
+    kiro_start_url:        extra?.kiro_start_url,
+    kiro_profile_arn:      extra?.kiro_profile_arn,
   };
 
   sessionStore.set(session_id, session);

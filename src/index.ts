@@ -101,6 +101,10 @@ app.use('/api', testIdjagRouter);
 import codexPdpRouter from './api/codexPdp';
 app.use('/api', codexPdpRouter);
 
+// ── Kiro governance router (additive — reuses the same PDP engine; /api/kiro/*) ──
+import kiroPdpRouter from './api/kiroPdp';
+app.use('/api', kiroPdpRouter);
+
 // HITL routes
 import { hitlRouter } from './api/hitlConfig';
 app.use('/api', hitlRouter);

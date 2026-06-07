@@ -33,6 +33,9 @@ interface Session {
   git_email?: string; git_name?: string;
   git_branch?: string; git_remote_url?: string; jira_ticket_id?: string;
   connection_type?: string; ssh_client_ip?: string; remote_os?: string;
+  coding_agent?: string; surface?: string;
+  kiro_account_type?: string; kiro_email?: string; kiro_region?: string;
+  kiro_start_url?: string; kiro_profile_arn?: string;
 }
 
 interface ServerEntry {
@@ -209,6 +212,9 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       github_repo_paths: Record<string, string[]>;
       git_branch: string; git_remote_url: string; jira_ticket_id: string;
       connection_type: string; ssh_client_ip: string; remote_os: string;
+      coding_agent: string; surface: string;
+      kiro_account_type: string; kiro_email: string; kiro_region: string;
+      kiro_start_url: string; kiro_profile_arn: string;
     }>();
     sessions.forEach(s => {
       const key = `${s.oauth_email || s.user_email}::${s.hostname || 'unknown'}`;
@@ -222,6 +228,9 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
         github_repo_paths: {},
         git_branch: '', git_remote_url: '', jira_ticket_id: '',
         connection_type: 'local', ssh_client_ip: '', remote_os: '',
+        coding_agent: '', surface: '',
+        kiro_account_type: '', kiro_email: '', kiro_region: '',
+        kiro_start_url: '', kiro_profile_arn: '',
       });
       const entry = map.get(key)!;
       entry.sessions.push(s);
@@ -248,6 +257,13 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
       if (s.connection_type) entry.connection_type = s.connection_type;
       if (s.ssh_client_ip) entry.ssh_client_ip = s.ssh_client_ip;
       if (s.remote_os) entry.remote_os = s.remote_os;
+      if (s.coding_agent) entry.coding_agent = s.coding_agent;
+      if (s.surface) entry.surface = s.surface;
+      if (s.kiro_account_type) entry.kiro_account_type = s.kiro_account_type;
+      if (s.kiro_email) entry.kiro_email = s.kiro_email;
+      if (s.kiro_region) entry.kiro_region = s.kiro_region;
+      if (s.kiro_start_url) entry.kiro_start_url = s.kiro_start_url;
+      if (s.kiro_profile_arn) entry.kiro_profile_arn = s.kiro_profile_arn;
       (s.active_mcp_servers || []).forEach(m => entry.mcpServers.add(m));
       (s.mcp_servers_discovered || []).forEach(m => entry.mcpServers.add(m));
     });
@@ -365,9 +381,19 @@ function ClaudeCodeAgents({ sessions, decisions }: { sessions: Session[]; decisi
                         {detailRow('Model', a.model && a.model !== 'plan default' ? a.model : 'Claude Sonnet 4')}
                         {detailRow('Last Active', timeAgo(a.lastSeen))}
                         {detailRow('Status', <span style={{ color: isOnline ? T.green : T.gray400, fontWeight: 600 }}>{isOnline ? 'Online' : 'Offline'}</span>)}
-                        {a.account_uuid && detailRow('Anthropic Account ID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.account_uuid}</span>)}
-                        {a.org_uuid && detailRow('Anthropic Org UUID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.org_uuid}</span>)}
+                        {a.account_uuid && a.coding_agent !== 'kiro' && detailRow('Anthropic Account ID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.account_uuid}</span>)}
+                        {a.org_uuid && a.coding_agent !== 'kiro' && detailRow('Anthropic Org UUID', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.org_uuid}</span>)}
                         {a.user_id && detailRow('Anthropic User ID', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.user_id}</span>)}
+                        {a.coding_agent === 'kiro' && (<>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: '#FF9900', marginBottom: 8, marginTop: 16, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Kiro Identity</div>
+                          {a.kiro_account_type && detailRow('Auth Method', <Badge text={a.kiro_account_type} fg={a.kiro_account_type === 'IdentityCenter' ? '#7c3aed' : '#FF9900'} bg={a.kiro_account_type === 'IdentityCenter' ? '#ede9fe' : '#FFF3E0'} />)}
+                          {a.kiro_email && detailRow('Kiro Email', a.kiro_email)}
+                          {a.kiro_region && detailRow('AWS Region', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.kiro_region}</span>)}
+                          {a.kiro_start_url && detailRow('Identity Center URL', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.kiro_start_url}</span>)}
+                          {a.kiro_profile_arn && detailRow('Profile ARN', <span style={{ fontFamily: T.mono, fontSize: 11, wordBreak: 'break-all' }}>{a.kiro_profile_arn}</span>)}
+                        </>)}
+                        {a.coding_agent && detailRow('Coding Agent', <Badge text={a.coding_agent} fg={a.coding_agent === 'kiro' ? '#FF9900' : a.coding_agent === 'codex' ? '#10a37f' : T.accent} bg={a.coding_agent === 'kiro' ? '#FFF3E0' : a.coding_agent === 'codex' ? '#e6f7f1' : T.gray100} />)}
+                        {a.surface && detailRow('Surface', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{a.surface}</span>)}
                         {a.git_name && detailRow('Git Name', a.git_name)}
                         {a.git_email && detailRow('Git Email', a.git_email)}
                         {Object.keys(a.github_repo_paths).length > 0 && detailRow('Git Repos', <span style={{ fontFamily: T.mono, fontSize: 11 }}>{Object.keys(a.github_repo_paths).join(', ')}</span>)}
