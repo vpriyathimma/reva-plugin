@@ -137,7 +137,7 @@ function decisionAgent(d: DecisionLog): string {
 // deriveAll() roster so the product API and the demo agree row-for-row.
 // ─────────────────────────────────────────────────────────────────────────────
 export interface RosterRow {
-  id:            string;   // `Developer::"<user>"#<coding_agent>`  (URL-encode for path use)
+  id:            string;   // `Developer::"<user>"#<coding_agent>`
   principal:     string;   // `Developer::"<user>"`
   codingAgent:   string;   // claude-code | codex | kiro
   codingAgentLabel: string;
@@ -436,9 +436,22 @@ function sectionUsage() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Developer detail
 // ─────────────────────────────────────────────────────────────────────────────
-function findRow(roster: RosterRow[], id: string): RosterRow | undefined {
-  const decoded = decodeURIComponent(id);
-  return roster.find((r) => r.id === decoded || r.id === id || r.principal === decoded);
+// identity & sessions are addressed by authenticatedAs (the developer's email).
+function rowByEmail(roster: RosterRow[], authenticatedAs: string): RosterRow | undefined {
+  const e = decodeURIComponent(authenticatedAs || '');
+  return roster.find((r) => sameEmail(r.email, e));
+}
+
+// jit is addressed by spiffeId — match the identity's SPIFFE, falling back to a
+// credential's spiffe_id if the caller passes a per-credential SVID id.
+function rowBySpiffe(roster: RosterRow[], spiffeId: string): RosterRow | undefined {
+  const sp = decodeURIComponent(spiffeId || '');
+  let row = roster.find((r) => r.svid === sp);
+  if (!row) {
+    const sv = listAllSVIDs().find((s) => s.spiffe_id === sp);
+    if (sv) row = roster.find((r) => sameEmail(r.email, sv.developer_email));
+  }
+  return row;
 }
 
 function detailIdentity(row: RosterRow) {
@@ -709,22 +722,25 @@ insightsRouter.get('/insights/summary', (req, res) => {
   });
 });
 
-// ---- Developer detail (two sub-sections + JIT ledger) ----
-insightsRouter.get('/identities/:id/identity', (req, res) => {
-  const row = findRow(buildRoster(), req.params.id);
-  if (!row) return res.status(404).json({ error: 'identity not found', id: req.params.id });
+// ---- Developer detail ----
+//   GET /api/identities/:authenticatedAs/identity
+//   GET /api/identities/:authenticatedAs/sessions
+//   GET /api/identities/:spiffeId/jit
+insightsRouter.get('/identities/:authenticatedAs/identity', (req, res) => {
+  const row = rowByEmail(buildRoster(), req.params.authenticatedAs);
+  if (!row) return res.status(404).json({ error: 'identity not found', authenticatedAs: req.params.authenticatedAs });
   res.json(detailIdentity(row));
 });
 
-insightsRouter.get('/identities/:id/sessions', (req, res) => {
-  const row = findRow(buildRoster(), req.params.id);
-  if (!row) return res.status(404).json({ error: 'identity not found', id: req.params.id });
+insightsRouter.get('/identities/:authenticatedAs/sessions', (req, res) => {
+  const row = rowByEmail(buildRoster(), req.params.authenticatedAs);
+  if (!row) return res.status(404).json({ error: 'identity not found', authenticatedAs: req.params.authenticatedAs });
   res.json(detailSessions(row));
 });
 
-insightsRouter.get('/identities/:id/jit', (req, res) => {
-  const row = findRow(buildRoster(), req.params.id);
-  if (!row) return res.status(404).json({ error: 'identity not found', id: req.params.id });
+insightsRouter.get('/identities/:spiffeId/jit', (req, res) => {
+  const row = rowBySpiffe(buildRoster(), req.params.spiffeId);
+  if (!row) return res.status(404).json({ error: 'identity not found', spiffeId: req.params.spiffeId });
   res.json(detailJit(row));
 });
 
