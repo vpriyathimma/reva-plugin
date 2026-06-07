@@ -149,6 +149,11 @@ router.get('/sessions', (_req, res) => {
     entrypoint:        s.entrypoint       || '',
     coding_agent:      s.coding_agent     || 'claude-code',
     surface:           s.surface          || '',
+    kiro_account_type: (s as any).kiro_account_type || '',
+    kiro_email:        (s as any).kiro_email        || '',
+    kiro_region:       (s as any).kiro_region       || '',
+    kiro_start_url:    (s as any).kiro_start_url    || '',
+    kiro_profile_arn:  (s as any).kiro_profile_arn  || '',
   }));
   res.json({ sessions, total: sessions.length });
 });
