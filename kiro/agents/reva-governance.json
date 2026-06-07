@@ -1,42 +1,21 @@
 {
   "name": "reva-governance",
-  "description": "Reva AI governance agent — Cedar-enforced access control for every Kiro tool call and prompt. Shares the same PDP backend with the Claude Code and Codex plugins.",
+  "description": "Reva AI governance agent — Cedar-enforced access control for every Kiro tool call and prompt.",
   "hooks": {
     "agentSpawn": [
-      {
-        "command": "python3 ~/.kiro/reva/session.py",
-        "timeout_ms": 30000,
-        "max_output_size": 4096
-      }
+      { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/session.py", "timeout_ms": 30000, "max_output_size": 4096 }
     ],
     "userPromptSubmit": [
-      {
-        "command": "python3 ~/.kiro/reva/prompt.py",
-        "timeout_ms": 60000,
-        "max_output_size": 4096
-      }
+      { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/prompt.py", "timeout_ms": 60000, "max_output_size": 4096 }
     ],
     "preToolUse": [
-      {
-        "matcher": "*",
-        "command": "python3 ~/.kiro/reva/gate.py",
-        "timeout_ms": 120000,
-        "max_output_size": 4096
-      }
+      { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/gate.py", "timeout_ms": 120000, "max_output_size": 4096 }
     ],
     "postToolUse": [
-      {
-        "matcher": "*",
-        "command": "python3 ~/.kiro/reva/posttool.py",
-        "timeout_ms": 20000,
-        "max_output_size": 4096
-      }
+      { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/posttool.py", "timeout_ms": 20000, "max_output_size": 4096 }
     ],
     "stop": [
-      {
-        "command": "python3 ~/.kiro/reva/telemetry.py",
-        "timeout_ms": 15000
-      }
+      { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/telemetry.py", "timeout_ms": 15000 }
     ]
   },
   "includeMcpJson": true
