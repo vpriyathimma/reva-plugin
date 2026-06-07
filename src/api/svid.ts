@@ -133,6 +133,23 @@ export function listActiveSVIDs(): SVIDRecord[] {
   return active;
 }
 
+// ── List ALL SVIDs (active + expired + revoked) — powers the JIT ledger ──
+// Lazily refreshes status for any SVID whose TTL has lapsed so the ledger never
+// reports a stale "active". The store is keyed by (developer_email::project), so
+// this returns the most recent issuance per (developer, project) pair.
+export function listAllSVIDs(): SVIDRecord[] {
+  const now = new Date();
+  const all: SVIDRecord[] = [];
+  for (const [key, svid] of svidStore) {
+    if (svid.status === 'active' && new Date(svid.expires_at) < now) {
+      svid.status = 'expired';
+      svidStore.set(key, svid);
+    }
+    all.push(svid);
+  }
+  return all;
+}
+
 // ── Classify privileged commands ──
 export function isPrivilegedCommand(command: string): { privileged: boolean; type: string } {
   const cmd = command.trim().toLowerCase();

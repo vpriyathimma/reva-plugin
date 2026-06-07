@@ -22,7 +22,7 @@ const RevaStore = {
   state: {
     loading: true,
     sessions: [], decisions: [], quarantine: { quarantined: [], policies: [], capped_sessions: [], spawn_limit: 5 },
-    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [], approvers: [], approverSelected: "", policySets: [],
+    trust: {}, security: null, hitl: null, commands: { safe: [], restricted: [], destructive: [] }, filezones: [], mcp: [], terminated: [], approvers: [], approverSelected: "", policySets: [], svids: [],
   },
   subs: new Set(),
   set(patch) { this.state = { ...this.state, ...patch }; this.subs.forEach((f) => f()); },
@@ -39,12 +39,13 @@ let _refetching = false;
 async function revaRefetch() {
   if (_refetching) return; _refetching = true;
   try {
-    const [sess, dec, q, tr, term] = await Promise.all([
+    const [sess, dec, q, tr, term, svid] = await Promise.all([
       jget("/api/sessions").catch(() => ({ sessions: [] })),
       jget("/api/decisions").catch(() => ({ decisions: [] })),
       jget("/api/quarantine").catch(() => ({ quarantined: [], policies: [], capped_sessions: [], spawn_limit: 5 })),
       jget("/api/trust").catch(() => ({ trust: {} })),
       jget("/api/session/terminated").catch(() => ({ terminated: [] })),
+      jget("/api/svid").catch(() => ({ svids: [] })),
     ]);
     RevaStore.set({
       loading: false,
@@ -53,6 +54,7 @@ async function revaRefetch() {
       quarantine: q,
       trust: tr.trust || {},
       terminated: term.terminated || [],
+      svids: svid.svids || [],
     });
   } finally { _refetching = false; }
 }
@@ -154,6 +156,27 @@ function normTool(t) {
   return t || "Other";
 }
 
+// Blocked-prompt detection — same family the donut's "Prompt Injection" bucket
+// counts: not permitted AND injection/jailbreak/Claude-blocked intent.
+const BLOCKED_INTENTS = new Set(["prompt_injection_in_read", "blocked_by_claude", "jailbreak_attempt", "prompt_injection"]);
+function isBlockedDecision(d) {
+  if (d.effect === "Permit") return false;
+  if (d.intent && BLOCKED_INTENTS.has(d.intent)) return true;
+  const s = ((d.reason || "") + " " + (d.intent || "")).toLowerCase();
+  return s.includes("inject") || s.includes("jailbreak") || s.includes("blocked by claude");
+}
+function decisionAgentOf(d, sessById) {
+  const sess = sessById.get(d.session_id);
+  if (sess && sess.coding_agent) return sess.coding_agent;
+  if ((d.server || "").toLowerCase() === "claude-code") return "claude-code";
+  return "claude-code";
+}
+function sameEmailJs(a, b) {
+  if (!a || !b) return false;
+  const k = (x) => (x.includes("@") ? x.split("@")[0] : x).toLowerCase();
+  return a.toLowerCase() === b.toLowerCase() || k(a) === k(b);
+}
+
 // ---- derivations (produce the design's exact shapes) ----
 function deriveAll(s) {
   const qList = s.quarantine.quarantined || [];
@@ -178,6 +201,11 @@ function deriveAll(s) {
     if (!byUser.has(u)) byUser.set(u, []);
     byUser.get(u).push(sess);
   });
+
+  // session lookup by id — used to attribute a decision to its coding agent
+  const sessById = new Map();
+  (s.sessions || []).forEach((sess) => { if (sess.session_id) sessById.set(sess.session_id, sess); });
+  const svids = s.svids || [];
 
   // recent decisions per user (skip placeholders)
   const decByUser = new Map();
@@ -209,12 +237,26 @@ function deriveAll(s) {
     const spawnUsed = (decByUser.get(u) || []).filter((d) => normTool(d.tool) === "SpawnAgent" && d.effect === "Permit").length;
     const recent = (decByUser.get(u) || []).slice(0, 3).map((d) => ({ t: relTime(d.timestamp), a: normTool(d.tool), e: d.effect, r: d.reason || "" }));
     const tools = Array.from(new Set((latest.tools || []).map((t) => t.tool_name || t.name).filter(Boolean))).slice(0, 6);
+    // Security signals for the new Insights tiles (per identity, scoped to this coding agent)
+    const agentDecs = (decByUser.get(u) || []).filter((d) => decisionAgentOf(d, sessById) === codingAgent);
+    const promptsBlocked = agentDecs.filter(isBlockedDecision).length;
+    const myEmail = firstNonEmpty("oauth_email") || firstNonEmpty("user_email") || u;
+    const jit = svids
+      .filter((sv) => sameEmailJs(sv.developer_email, myEmail) || sameEmailJs(sv.developer_email, u))
+      .map((sv) => ({
+        id: sv.id, recipient: sv.developer_email, approver: sv.issued_by, action: sv.action,
+        project: sv.project, issuedAt: sv.issued_at, expiresAt: sv.expires_at,
+        state: sv.status === "active" && new Date(sv.expires_at).getTime() < Date.now() ? "expired" : sv.status,
+        spiffeId: sv.spiffe_id, hasJwt: !!sv.jwt,
+      }));
+    const jitActive = jit.filter((j) => j.state === "active").length;
     roster.push({
       id: principalOf(u) + "#" + codingAgent, principal: principalOf(u), codingAgent, surface: latest.surface || "", kind: "dev",
       email: firstNonEmpty("oauth_email") || firstNonEmpty("user_email") || u,
       model: latest.model || "—",
       os: latest.os_type || latest.remote_os || "—",
       sessions: sessions.filter((x) => !termIds.has(x.session_id)).length, trust, state, owner: u,
+      promptsBlocked, jit, jitCount: jit.length, jitActive,
       quarantine: qRec ? { osUser: qRec.osUser, policyId: qRec.policyId, policyName: qRec.policyName, resolution: qRec.resolution, message: qRec.message, status: qRec.status, since: qRec.since } : null,
       svid: stableSpiffe || ("agent-hash:" + (latest.session_id || "").slice(0, 8) + " (fallback)"),
       svidFallback: !stableSpiffe,
@@ -248,8 +290,15 @@ function deriveAll(s) {
   const governed = byUser.size;
   const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
   const newQuarantinesToday = (s.quarantine.quarantined || []).filter((q) => q.since && new Date(q.since) >= startToday).length;
+  const promptsBlockedTotal = roster.reduce((n, r) => n + (r.promptsBlocked || 0), 0);
+  const jitTotal = svids.length;
+  const jitActiveTotal = svids.filter((sv) => sv.status === "active" && new Date(sv.expires_at).getTime() > Date.now()).length;
   const kpis = {
     coverage: { governed, total: COVERAGE_TOTAL, ungoverned: Math.max(0, COVERAGE_TOTAL - governed) },
+    agents: roster.length,
+    promptsBlocked: promptsBlockedTotal,
+    jit: jitTotal,
+    jitActive: jitActiveTotal,
     active: roster.filter((r) => r.state === "Active").length,
     capped: roster.filter((r) => r.state === "Spawn-capped").length,
     quarantines: (s.quarantine.quarantined || []).length,
@@ -988,12 +1037,15 @@ function CardHead({ title, right }) {
 }
 
 const FILTERS = {
-  all:         { label: "All identities",   test: () => true },
-  coverage:    { label: "Governed users",   test: (r) => r.kind === "dev" },
-  active:      { label: "Active",            test: (r) => r.state === "Active" },
-  capped:      { label: "Spawn-capped",      test: (r) => r.state === "Spawn-capped" },
-  quarantined: { label: "Quarantined",       test: (r) => r.state === "Quarantined" },
-  lowtrust:    { label: "Low trust (≤ 60)",  test: (r) => r.trust <= 60 },
+  all:           { label: "All identities",   test: () => true },
+  agents:        { label: "Agents",            test: (r) => r.kind === "dev" },
+  promptsBlocked:{ label: "Prompts blocked",   test: (r) => (r.promptsBlocked || 0) > 0 },
+  jit:           { label: "JIT access",        test: (r) => (r.jitCount || 0) > 0 },
+  coverage:      { label: "Governed users",    test: (r) => r.kind === "dev" },
+  active:        { label: "Active",            test: (r) => r.state === "Active" },
+  capped:        { label: "Spawn-capped",      test: (r) => r.state === "Spawn-capped" },
+  quarantined:   { label: "Quarantined",       test: (r) => r.state === "Quarantined" },
+  lowtrust:      { label: "Low trust (≤ 60)",  test: (r) => r.trust <= 60 },
 };
 
 function Insights() {
@@ -1024,10 +1076,10 @@ function Insights() {
     <div style={{ padding: 28 }}>
       {/* KPI / filter tiles */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16, marginBottom: 16 }}>
-        <KpiTile label="Governance Coverage" value={String(reva.kpis.coverage.governed)} sub={<span style={{ fontSize: 15, color: "var(--ink-3)", fontWeight: 600 }}>/ {reva.kpis.coverage.total} users</span>}
-          foot={<Pill tone="amber">{reva.kpis.coverage.ungoverned} ungoverned</Pill>} active={filter === "coverage"} onClick={() => pickFilter("coverage")} />
-        <KpiTile label="Active" tone="green" value={count("active")} foot={count("active") > 0 ? <Trend dir="flat">healthy</Trend> : null} active={filter === "active"} onClick={() => pickFilter("active")} />
-        <KpiTile label="Spawn-capped" tone="amber" value={count("capped")} foot={reva.kpis.capped > 0 ? <Trend dir="up">budget reached</Trend> : null} active={filter === "capped"} onClick={() => pickFilter("capped")} />
+        <KpiTile label="Agents" value={String(reva.kpis.agents)}
+          foot={<span style={{ fontSize: 12, color: "var(--ink-4)", fontWeight: 600 }}>under governance</span>} active={filter === "agents"} onClick={() => pickFilter("agents")} />
+        <KpiTile label="Prompts Blocked" tone="red" value={count("promptsBlocked")} foot={reva.kpis.promptsBlocked > 0 ? <Trend dir="up">{reva.kpis.promptsBlocked} blocked</Trend> : <span style={{ fontSize: 12, color: "var(--ink-4)", fontWeight: 600 }}>none</span>} active={filter === "promptsBlocked"} onClick={() => pickFilter("promptsBlocked")} />
+        <KpiTile label="JIT (Just-in-Time Access)" tone="blue" value={String(reva.kpis.jit)} foot={<span style={{ fontSize: 12, color: "var(--ink-4)", fontWeight: 600 }}>{reva.kpis.jitActive} active · short-lived creds</span>} active={filter === "jit"} onClick={() => pickFilter("jit")} />
         <KpiTile label="Active Quarantines" tone="red" value={count("quarantined")} foot={reva.kpis.quarantines > 0 ? <Trend dir="up">{reva.kpis.newQuarantinesToday} new today</Trend> : null} active={filter === "quarantined"} onClick={() => pickFilter("quarantined")} />
         <KpiTile label="Low Trust (≤ 60)" tone="red" value={count("lowtrust")} foot={reva.kpis.lowtrust > 0 ? <Trend dir="up">below threshold</Trend> : null} active={filter === "lowtrust"} onClick={() => pickFilter("lowtrust")} />
       </div>
@@ -1426,6 +1478,26 @@ function AgentDetail({ row }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {row.accountUuid ? <Field label={(row.codingAgent === "codex" ? "OpenAI" : "Anthropic") + " Account ID"} mono>{row.accountUuid}</Field> : null}
             {row.orgUuid ? <Field label={(row.codingAgent === "codex" ? "OpenAI" : "Anthropic") + " Org ID"} mono>{row.orgUuid}</Field> : null}
+          </div>
+        )}
+
+        {row.jit && row.jit.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--blue-700)", textTransform: "uppercase", letterSpacing: "0.4px", marginTop: 8 }}>JIT — Short-Lived Credentials</div>
+            {row.jit.map((j) => (
+              <div key={j.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "11px 13px", background: "var(--surface-2)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="mono" style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)" }}>{j.action || "privileged op"}</span>
+                  <span className={"pill pill-" + (j.state === "active" ? "green" : j.state === "revoked" ? "red" : "amber")} style={{ marginLeft: "auto" }}><span className="dot" />{j.state}</span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+                  <span className="help">approved by: <span className="mono" style={{ color: "var(--ink-2)" }}>{j.approver || "—"}</span></span>
+                  {j.project ? <span className="help">project: <span className="mono" style={{ color: "var(--ink-2)" }}>{j.project}</span></span> : null}
+                  <span className="help">issued: <span className="mono" style={{ color: "var(--ink-2)" }}>{relTime(j.issuedAt)}</span></span>
+                  <span className="help">expires: <span className="mono" style={{ color: "var(--ink-2)" }}>{new Date(j.expiresAt).toLocaleTimeString()}</span></span>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>

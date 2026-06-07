@@ -340,6 +340,11 @@ app.use('/api', ruleConfigRouter);
 app.use('/api', approverConfigRouter);
 app.use('/api', policySetsRouter);
 
+// Insights API — standalone, read-only surface for the internal product team.
+// Routes: /api/insights/*, /api/identities/:id/*, /api/intent-profile
+import { insightsRouter } from './api/insights';
+app.use('/api', insightsRouter);
+
 // Classification config routes
 import { getCommandRules, setCommandRules, getFileZoneRules, setFileZoneRules } from './api/pdpEvaluate';
 import { getAllBlocks } from './api/intentClassifier';
@@ -352,6 +357,13 @@ app.get('/api/blocks', (_req, res) => {
   const result: Record<string, any[]> = {};
   for (const [sid, blocks] of allBlocks) { result[sid] = blocks; }
   res.json({ blocks: result });
+});
+
+// Raw SVID list — short-lived credentials (JIT). Powers the dashboard's JIT tile
+// and is also consumable directly. Includes active, expired, and revoked.
+import { listAllSVIDs } from './api/svid';
+app.get('/api/svid', (_req, res) => {
+  res.json({ svids: listAllSVIDs() });
 });
 
 // ── Health ────────────────────────────────────────────────────────
