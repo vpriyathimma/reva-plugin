@@ -1401,6 +1401,7 @@ function Field({ label, children, mono }) {
 
 function AgentDetail({ row }) {
   const quarantined = row.state === "Quarantined";
+  const mcpList = Array.from(new Set((row.sessionsList || []).flatMap((s) => s.mcp_servers_discovered || []).filter(Boolean)));
   const [appr, setAppr] = React.useState("idle"); // idle | sending | sent | noslack | error
   const osUserOfRow = () => (row.quarantine && row.quarantine.osUser) || (row.id.match(/"([^"]+)"/) || [])[1] || "";
   React.useEffect(() => { setAppr("idle"); }, [row.id]);
@@ -1468,9 +1469,9 @@ function AgentDetail({ row }) {
 
         <Field label="Coding Agent">{row.codingAgent === "codex" ? "Codex" : row.codingAgent === "kiro" ? "Kiro" : "Claude Code"}{row.surface ? " · " + row.surface : ""}</Field>
         <Field label="McpServers">
-          {(row.mcp && row.mcp.length) ? (
+          {mcpList.length ? (
             <span style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {row.mcp.map((m) => (
+              {mcpList.map((m) => (
                 <span key={m} className="mono" style={{ fontSize: 11.5, padding: "3px 9px", borderRadius: 6, background: "var(--blue-tint)", color: "var(--blue-700)", border: "1px solid var(--border)", fontWeight: 600 }}>{m}</span>
               ))}
             </span>

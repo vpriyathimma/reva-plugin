@@ -616,9 +616,12 @@ function ipCompute(d: DecisionLog) {
   const mx = Math.max(...arr), mean = arr.reduce((a, b) => a + b, 0) / arr.length;
   const agg = ipClamp(0.62 * mx + 0.38 * mean);
 
+  const realTrace = ctx.session_trace_id || '';
   return {
     section: 'Intent Profile',
-    trace: 'trc_' + (d.session_id || '').replace(/[^a-z0-9]/gi, '').slice(0, 8),
+    traceId: realTrace,                                  // W3C trace (per-session) from the PDP request
+    traceparent: realTrace ? '00-' + realTrace.replace(/-/g, '').padEnd(32, '0').slice(0, 32) + '-0000000000000001-01' : '',
+    trace: 'trc_' + (d.session_id || '').replace(/[^a-z0-9]/gi, '').slice(0, 8),  // dashboard slug
     sessionId: d.session_id,
     timestamp: d.timestamp,
     axes,
@@ -636,6 +639,14 @@ function ipCompute(d: DecisionLog) {
 
 function traceSlug(sessionId: string) {
   return 'trc_' + (sessionId || '').replace(/[^a-z0-9]/gi, '').slice(0, 8);
+}
+
+// Trace id for a decision — the real per-session W3C trace minted by the PDP,
+// matching how the Decision Logs page derives it. Falls back to a session-derived
+// id when a decision never went through Cedar.
+function traceIdOf(d: DecisionLog): string {
+  return (d.cedar_context && d.cedar_context.session_trace_id)
+    || ('trc-' + ((d.session_id || '').replace(/[^a-z0-9]/gi, '').slice(0, 24) || '—'));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -746,18 +757,14 @@ insightsRouter.get('/identities/jit', (req, res) => {
   res.json(detailJit(row));
 });
 
-// ---- Decisions list — the source of the unique per-decision id ----
-// Each decision's unique handle is `decisionId` ("dec_<n>", stable for the
-// process). `cedarDecisionId` (the PDP-issued UUID) is also surfaced when the
-// decision was evaluated by Cedar. Feed either into /api/intent-profile.
+// ---- Decisions list — discover traces to pass to /api/intent-profile ----
+// Each decision is tagged with its traceId and timestamp (no decisionId).
 insightsRouter.get('/insights/decisions', (req, res) => {
   const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 100;
-  const list = decisionLog.map((d, i) => ({
-    decisionId: 'dec_' + i,
-    cedarDecisionId: d.cedar_decision_id || null,
-    trace: traceSlug(d.session_id),
-    sessionId: d.session_id,
+  const list = decisionLog.map((d) => ({
+    traceId: traceIdOf(d),
     timestamp: d.timestamp,
+    sessionId: d.session_id,
     tool: d.tool,
     effect: d.effect,
     intent: d.intent || '',
@@ -767,36 +774,28 @@ insightsRouter.get('/insights/decisions', (req, res) => {
 });
 
 // ---- Intent profile ----
-// Target one decision by (in priority order):
-//   ?id=dec_<n>            unique decision id (from /api/insights/decisions)
-//   ?cedarDecisionId=<uuid> PDP decision id (Cedar-evaluated decisions only)
-//   ?session=<id>&seq=<n>  the Nth decision in a session (default: latest)
-//   ?trace=trc_<8>         dashboard trace slug
-//   (none)                 most recent decision
+// Mirrors the Decision Logs "Intent Profile": one profile per decision, each
+// tagged with its traceId + timestamp. Pass a traceId to get the intent profile
+// for every decision in that trace (the whole set). No decisionId is returned.
+//   GET /api/intent-profile?traceId=<session_trace_id>
+//   GET /api/intent-profile?session=<session_id>   (fallback)
 insightsRouter.get('/intent-profile', (req, res) => {
-  const id = req.query.id ? String(req.query.id) : '';
-  const cedarId = req.query.cedarDecisionId ? String(req.query.cedarDecisionId) : '';
-  const trace = req.query.trace ? String(req.query.trace) : '';
+  const traceId = req.query.traceId ? String(req.query.traceId) : '';
   const session = req.query.session ? String(req.query.session) : '';
-  const seq = req.query.seq != null ? parseInt(String(req.query.seq), 10) : NaN;
 
-  let idx = -1;
-  if (id) {
-    const m = /^dec_(\d+)$/.exec(id);
-    if (m) idx = parseInt(m[1], 10);
-  } else if (cedarId) {
-    idx = decisionLog.findIndex((d) => d.cedar_decision_id === cedarId);
+  let decisions: DecisionLog[];
+  if (traceId) {
+    decisions = decisionLog.filter((d) => traceIdOf(d) === traceId);
   } else if (session) {
-    const matches: number[] = [];
-    decisionLog.forEach((d, i) => { if (d.session_id === session) matches.push(i); });
-    idx = !isNaN(seq) ? matches[seq] : matches[matches.length - 1];
-  } else if (trace) {
-    for (let i = decisionLog.length - 1; i >= 0; i--) { if (traceSlug(decisionLog[i].session_id) === trace) { idx = i; break; } }
+    decisions = decisionLog.filter((d) => d.session_id === session);
   } else {
-    idx = decisionLog.length - 1;
+    return res.status(400).json({ error: 'traceId query param required', example: '/api/intent-profile?traceId=<session_trace_id from /api/insights/decisions>' });
   }
 
-  const target = idx >= 0 ? decisionLog[idx] : undefined;
-  if (!target) return res.status(404).json({ error: 'no matching decision', id, cedarDecisionId: cedarId, trace, session });
-  res.json({ decisionId: 'dec_' + idx, cedarDecisionId: target.cedar_decision_id || null, ...ipCompute(target) });
+  if (!decisions.length) return res.status(404).json({ error: 'no decisions for trace', traceId, session });
+
+  const resolvedTrace = traceId || traceIdOf(decisions[0]);
+  // one intent profile per decision in the trace; each carries traceId + timestamp
+  const profiles = decisions.map((d) => ({ ...ipCompute(d), traceId: traceIdOf(d) }));
+  res.json({ traceId: resolvedTrace, count: profiles.length, profiles });
 });
