@@ -181,15 +181,6 @@ function buildRoster() {
     byUser.get(u)!.push(sess);
   });
 
-  // decisions per user
-  const decByUser = new Map<string, DecisionLog[]>();
-  decisionLog.forEach((d) => {
-    const u = userKey(d.user_email || '');
-    if (!isRealUser(u)) return;
-    if (!decByUser.has(u)) decByUser.set(u, []);
-    decByUser.get(u)!.push(d);
-  });
-
   const quarantineFor = (u: string, sess: EnrolledSession): QuarantineRecord | null => {
     const cands = new Set([u, sess.user_email, sess.oauth_email,
       (sess.user_email || '').split('@')[0], (sess.oauth_email || '').split('@')[0]]
@@ -223,9 +214,11 @@ function buildRoster() {
       const qRec = quarantineFor(u, latest);
       const isQ = !!qRec;
 
-      // identity-level decisions for this user (block attribution scoped to this agent)
-      const userDecs = decByUser.get(u) || [];
-      const agentDecs = userDecs.filter((d) => decisionAgent(d) === codingAgent);
+      // identity-level decisions for this user, attributed by session_id: each
+      // decision carries one, and these sessions belong to exactly this
+      // (developer × coding-agent) row — immune to email/name key drift.
+      const mySessIds = new Set(sList.map((x) => x.session_id).filter(Boolean));
+      const agentDecs = decisionLog.filter((d) => mySessIds.has(d.session_id));
       const promptsBlocked = agentDecs.filter(isBlockedDecision).length;
 
       // JIT creds issued to this developer (matched by email)

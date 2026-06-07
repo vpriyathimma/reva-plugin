@@ -237,8 +237,11 @@ function deriveAll(s) {
     const spawnUsed = (decByUser.get(u) || []).filter((d) => normTool(d.tool) === "SpawnAgent" && d.effect === "Permit").length;
     const recent = (decByUser.get(u) || []).slice(0, 3).map((d) => ({ t: relTime(d.timestamp), a: normTool(d.tool), e: d.effect, r: d.reason || "" }));
     const tools = Array.from(new Set((latest.tools || []).map((t) => t.tool_name || t.name).filter(Boolean))).slice(0, 6);
-    // Security signals for the new Insights tiles (per identity, scoped to this coding agent)
-    const agentDecs = (decByUser.get(u) || []).filter((d) => decisionAgentOf(d, sessById) === codingAgent);
+    // Security signals for the new Insights tiles (per identity, scoped to this coding agent).
+    // Attribute by session_id: each decision carries one, and these sessions belong
+    // to exactly this (developer × coding-agent) row — immune to email/name key drift.
+    const mySessIds = new Set(sessions.map((x) => x.session_id).filter(Boolean));
+    const agentDecs = (s.decisions || []).filter((d) => mySessIds.has(d.session_id));
     const promptsBlocked = agentDecs.filter(isBlockedDecision).length;
     const myEmail = firstNonEmpty("oauth_email") || firstNonEmpty("user_email") || u;
     const jit = svids
@@ -290,7 +293,7 @@ function deriveAll(s) {
   const governed = byUser.size;
   const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
   const newQuarantinesToday = (s.quarantine.quarantined || []).filter((q) => q.since && new Date(q.since) >= startToday).length;
-  const promptsBlockedTotal = roster.reduce((n, r) => n + (r.promptsBlocked || 0), 0);
+  const promptsBlockedTotal = (s.decisions || []).filter((d) => isBlockedDecision(d) && decisionAgentOf(d, sessById) === "claude-code").length;
   const jitTotal = svids.length;
   const jitActiveTotal = svids.filter((sv) => sv.status === "active" && new Date(sv.expires_at).getTime() > Date.now()).length;
   const kpis = {
