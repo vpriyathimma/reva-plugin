@@ -91,8 +91,17 @@ export function extractKiroTarget(
     }
 
     // File path — Kiro uses `path`, `file_path`, or `file`
+    // Kiro read/write tools send path inside operations array:
+    //   { operations: [{ mode: "Line", path: "/some/file" }] }
     if (!out.filePath) {
       out.filePath = String(toolInput?.path ?? toolInput?.file_path ?? toolInput?.file ?? '');
+    }
+    if (!out.filePath && Array.isArray(toolInput?.operations) && toolInput.operations.length > 0) {
+      out.filePath = String(toolInput.operations[0]?.path ?? '');
+    }
+    // Kiro list-directory sends path at top level
+    if (!out.filePath && toolInput?.directory_path) {
+      out.filePath = String(toolInput.directory_path);
     }
 
     // Operation detection

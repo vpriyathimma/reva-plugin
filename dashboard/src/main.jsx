@@ -227,6 +227,11 @@ function deriveAll(s) {
       sshClientIp: latest.ssh_client_ip || "",
       accountUuid: firstNonEmpty("account_uuid"),
       orgUuid: firstNonEmpty("org_uuid"),
+      kiroAccountType: firstNonEmpty("kiro_account_type"),
+      kiroEmail: firstNonEmpty("kiro_email"),
+      kiroRegion: firstNonEmpty("kiro_region"),
+      kiroStartUrl: firstNonEmpty("kiro_start_url"),
+      kiroProfileArn: firstNonEmpty("kiro_profile_arn"),
       jiraTicket: latest.jira_ticket_id || "",
       enrolledAt: latest.enrolled_at || "",
       sessionsList: sessions,
@@ -1288,7 +1293,7 @@ function RosterTable({ rows, selectedId, onSelect }) {
                 </div>
               </td>
               <td className="sub">{r.email}</td>
-              <td><span className="mono" style={{ fontSize: 11, padding: "2px 7px", borderRadius: 6, background: r.codingAgent === "codex" ? "var(--purple-tint)" : "var(--blue-tint)", color: r.codingAgent === "codex" ? "var(--purple)" : "var(--blue-700)" }}>{r.codingAgent === "codex" ? "Codex" : "Claude Code"}</span></td>
+              <td><span className="mono" style={{ fontSize: 11, padding: "2px 7px", borderRadius: 6, background: r.codingAgent === "codex" ? "var(--purple-tint)" : r.codingAgent === "kiro" ? "#FFF3E0" : "var(--blue-tint)", color: r.codingAgent === "codex" ? "var(--purple)" : r.codingAgent === "kiro" ? "#FF9900" : "var(--blue-700)" }}>{r.codingAgent === "codex" ? "Codex" : r.codingAgent === "kiro" ? "Kiro" : "Claude Code"}</span></td>
               <td><span className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)" }}>{r.model}</span></td>
               <td className="sub">{r.os}</td>
               <td className="right mono" style={{ fontWeight: 600 }}>{r.sessions}</td>
@@ -1406,8 +1411,18 @@ function AgentDetail({ row }) {
         <Field label={row.svidFallback ? "Agent ID (SVID fallback)" : "SPIFFE / SVID"} mono>{row.svid}</Field>
         {row.svidFallback && <div className="help" style={{ marginTop: -10, color: "var(--amber-ink)" }}>No SVID issued — using agent-hash fallback.</div>}
 
-        <Field label="Coding Agent">{row.codingAgent === "codex" ? "Codex" : "Claude Code"}{row.surface ? " · " + row.surface : ""}</Field>
-        {(row.accountUuid || row.orgUuid) && (
+        <Field label="Coding Agent">{row.codingAgent === "codex" ? "Codex" : row.codingAgent === "kiro" ? "Kiro" : "Claude Code"}{row.surface ? " · " + row.surface : ""}</Field>
+        {row.codingAgent === "kiro" && (row.kiroAccountType || row.kiroEmail || row.kiroRegion || row.kiroStartUrl || row.kiroProfileArn) && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#FF9900", textTransform: "uppercase", letterSpacing: "0.4px", marginTop: 8 }}>Kiro Identity (AWS)</div>
+            {row.kiroAccountType ? <Field label="Auth Method"><span className="mono" style={{ padding: "2px 7px", borderRadius: 6, background: "#FFF3E0", color: "#FF9900", fontSize: 11 }}>{row.kiroAccountType}</span></Field> : null}
+            {row.kiroEmail ? <Field label="Kiro Email">{row.kiroEmail}</Field> : null}
+            {row.kiroRegion ? <Field label="AWS Region" mono>{row.kiroRegion}</Field> : null}
+            {row.kiroStartUrl ? <Field label="Identity Center URL" mono>{row.kiroStartUrl}</Field> : null}
+            {row.kiroProfileArn ? <Field label="Profile ARN" mono>{row.kiroProfileArn}</Field> : null}
+          </div>
+        )}
+        {row.codingAgent !== "kiro" && (row.accountUuid || row.orgUuid) && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {row.accountUuid ? <Field label={(row.codingAgent === "codex" ? "OpenAI" : "Anthropic") + " Account ID"} mono>{row.accountUuid}</Field> : null}
             {row.orgUuid ? <Field label={(row.codingAgent === "codex" ? "OpenAI" : "Anthropic") + " Org ID"} mono>{row.orgUuid}</Field> : null}
