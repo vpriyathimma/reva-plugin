@@ -9,10 +9,10 @@
       { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/prompt.py", "timeout_ms": 60000, "max_output_size": 4096 }
     ],
     "preToolUse": [
-      { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/gate.py", "timeout_ms": 120000, "max_output_size": 4096 }
+      { "matcher": "@builtin", "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/gate.py", "timeout_ms": 120000, "max_output_size": 4096 }
     ],
     "postToolUse": [
-      { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/posttool.py", "timeout_ms": 20000, "max_output_size": 4096 }
+      { "matcher": "@builtin", "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/posttool.py", "timeout_ms": 20000, "max_output_size": 4096 }
     ],
     "stop": [
       { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/telemetry.py", "timeout_ms": 15000 }
