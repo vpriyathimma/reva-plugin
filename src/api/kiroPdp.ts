@@ -251,6 +251,15 @@ router.post('/kiro/evaluate', async (req, res) => {
       console.log(`[KIRO:drift] agent=${agentType} score=${drift.intent_drift_score} asked="${(scope.declared || scope.initial).slice(0,50)}" target="${driftTarget.slice(0,60)}"`);
     }
 
+    // Normalize Kiro tool names to Claude Code vocabulary so buildFileOperationPayload's
+    // internal mapToolToAction() produces the correct Cedar action.
+    // Kiro sends: shell/read/write/edit — Claude Code expects: bash/read/write/edit
+    const normalizedToolName = isBashAction(action) ? 'bash'
+      : action === 'WriteFile' ? 'write'
+      : action === 'EditFile'  ? 'edit'
+      : action === 'ReadFile'  ? 'read'
+      : toolName;
+
     const payload = isMCP
       ? buildMCPToolPayload({
           osUser: user_email, projectName: project, toolName: tgt.mcpTool || toolName,
@@ -260,7 +269,7 @@ router.post('/kiro/evaluate', async (req, res) => {
           declaredScope: scope.declared, initialScope: scope.initial,
         })
       : buildFileOperationPayload({
-          osUser: user_email, projectName: project, toolName,
+          osUser: user_email, projectName: project, toolName: normalizedToolName,
           filePath: tgt.filePath, command: isBashAction(action) ? tgt.command : undefined,
           agentType, sessionId: session_id, hitlAcknowledged: false,
           isIntentDrift: drift.is_intent_drift, intentDriftScore: drift.intent_drift_score,
