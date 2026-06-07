@@ -33,7 +33,7 @@ import {
   getOrCreateSessionTrace,
   cedarFields,
 } from './pdpEvaluate';
-import { logDecision, enrollSession } from '../connector/discovery/enroll';
+import { logDecision, enrollSession, sessionStore } from '../connector/discovery/enroll';
 import { getPIPContext, enrichSession as enrichPIP } from './pip';
 import { classifyPrompt, recordBlock, getPersistentTrust, checkIntentDrift } from './intentClassifier';
 import { resolveSession } from './sessionResolver';
@@ -116,6 +116,17 @@ router.post('/kiro/session', async (req, res) => {
       kiro_start_url:     ki.startUrl || undefined,
       kiro_profile_arn:   ki.profileArn || undefined,
     } as any);
+
+    // Force kiro_* fields directly onto the session object — bypasses any stale
+    // compiled enroll.js that may not assign them during session construction.
+    const sess = sessionStore.get(session_id);
+    if (sess) {
+      sess.kiro_account_type = ki.accountType || undefined;
+      sess.kiro_email        = ki.email || undefined;
+      sess.kiro_region       = ki.region || undefined;
+      sess.kiro_start_url    = ki.startUrl || undefined;
+      sess.kiro_profile_arn  = ki.profileArn || undefined;
+    }
 
     // PIP enrichment — identical to Claude / Codex path
     try {
