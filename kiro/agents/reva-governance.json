@@ -1,6 +1,8 @@
 {
   "name": "reva-governance",
   "description": "Reva AI governance agent — Cedar-enforced access control for every Kiro tool call and prompt.",
+  "tools": ["@builtin"],
+  "allowedTools": ["@builtin"],
   "hooks": {
     "agentSpawn": [
       { "command": "python3 /Users/saisrungaram/reva-cowork-plugin/kiro/bin/session.py", "timeout_ms": 30000, "max_output_size": 4096 }
