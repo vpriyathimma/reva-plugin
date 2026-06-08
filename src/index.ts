@@ -345,6 +345,11 @@ app.use('/api', policySetsRouter);
 import { insightsRouter } from './api/insights';
 app.use('/api', insightsRouter);
 
+// Adaptive Access Isolation (AAI) API — Home page policy board.
+// Routes: /api/aai/policies, /api/aai/policies/:policyId
+import { aaiRouter } from './api/aai';
+app.use('/api', aaiRouter);
+
 // Classification config routes
 import { getCommandRules, setCommandRules, getFileZoneRules, setFileZoneRules } from './api/pdpEvaluate';
 import { getAllBlocks } from './api/intentClassifier';
