@@ -164,6 +164,10 @@ export interface RosterRow {
   kiro: {
     accountType: string; email: string; region: string; startUrl: string; profileArn: string;
   } | null;
+  // McpServers (union across this identity's sessions) + per-identity insights (mirror the dashboard detail panel)
+  mcp:           string[];
+  surfaceInsights: { surface: string; sessions: number; denyPct: number }[];
+  denyReasons:   { label: string; count: number; pct: number }[];
   // raw session ids backing this row (for /sessions and /jit joins)
   sessionIds:    string[];
 }
@@ -221,6 +225,34 @@ function buildRoster() {
       const agentDecs = decisionLog.filter((d) => mySessIds.has(d.session_id));
       const promptsBlocked = agentDecs.filter(isBlockedDecision).length;
 
+      // McpServers (union across this identity's sessions) — mirrors the dashboard detail panel.
+      const mcp = Array.from(new Set(sList.flatMap((x) => x.mcp_servers_discovered || []).filter(Boolean)));
+      // Per-identity insights: sessions & deny-rate by access surface, deny reasons (mirror deriveAll).
+      const surfMap = new Map<string, { surface: string; sessions: number; denials: number; total: number }>();
+      const sessSurf = new Map<string, string>();
+      const surfOf = (x: EnrolledSession) => x.surface || x.entrypoint || 'Unknown';
+      sList.forEach((x) => {
+        const sf = surfOf(x);
+        if (x.session_id) sessSurf.set(x.session_id, sf);
+        const e = surfMap.get(sf) || { surface: sf, sessions: 0, denials: 0, total: 0 };
+        e.sessions += 1; surfMap.set(sf, e);
+      });
+      agentDecs.forEach((d) => {
+        const sf = sessSurf.get(d.session_id) || 'Unknown';
+        const e = surfMap.get(sf) || { surface: sf, sessions: 0, denials: 0, total: 0 };
+        e.total += 1; if (d.effect !== 'Permit') e.denials += 1; surfMap.set(sf, e);
+      });
+      const surfaceInsights = Array.from(surfMap.values()).map((e) => ({
+        surface: e.surface, sessions: e.sessions,
+        denyPct: e.total ? Math.round((e.denials / e.total) * 100) : 0,
+      }));
+      const reasonMap: Record<string, number> = {};
+      agentDecs.filter((d) => d.effect !== 'Permit').forEach((d) => { const b = denyBucket(d); reasonMap[b] = (reasonMap[b] || 0) + 1; });
+      const reasonTotal = Object.values(reasonMap).reduce((a, b) => a + b, 0);
+      const denyReasons = Object.keys(reasonMap)
+        .map((k) => ({ label: k, count: reasonMap[k], pct: reasonTotal ? Math.round((reasonMap[k] / reasonTotal) * 100) : 0 }))
+        .sort((a, b) => b.pct - a.pct);
+
       // JIT creds issued to this developer (matched by email)
       const email = (firstNonEmpty('oauth_email') || firstNonEmpty('user_email') || u) as string;
       const myJit = svids.filter((s) => sameEmail(s.developer_email, email) || sameEmail(s.developer_email, u));
@@ -257,6 +289,9 @@ function buildRoster() {
           profileArn: firstNonEmpty('kiro_profile_arn'),
         } : null,
         sessionIds: sList.map((x) => x.session_id),
+        mcp,
+        surfaceInsights,
+        denyReasons,
       });
     }
   }
@@ -468,6 +503,7 @@ function detailIdentity(row: RosterRow) {
     codingAgent: row.codingAgent,
     codingAgentLabel: row.codingAgentLabel,
     surface: row.surface,
+    mcpServers: row.mcp,
     trust: row.trust,
     state: row.state,
     // provider identity (one of the two will be populated)
@@ -475,6 +511,9 @@ function detailIdentity(row: RosterRow) {
     orgUuid: row.orgUuid,
     providerLabel: row.codingAgent === 'codex' ? 'OpenAI' : row.codingAgent === 'kiro' ? 'AWS' : 'Anthropic',
     kiro: row.kiro,    // null unless codingAgent === 'kiro'
+    // per-identity insights — mirror the dashboard detail panel's bottom section
+    surfaceInsights: row.surfaceInsights,   // [{ surface, sessions, denyPct }]
+    denyReasons: row.denyReasons,           // [{ label, count, pct }]
   };
 }
 
