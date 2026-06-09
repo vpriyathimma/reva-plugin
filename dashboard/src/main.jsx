@@ -243,6 +243,31 @@ function deriveAll(s) {
     const mySessIds = new Set(sessions.map((x) => x.session_id).filter(Boolean));
     const agentDecs = (s.decisions || []).filter((d) => mySessIds.has(d.session_id));
     const promptsBlocked = agentDecs.filter(isBlockedDecision).length;
+    // Per-identity detail-panel insights: sessions & deny-rate by access surface, deny reasons.
+    const _surfMap = new Map();   // surface -> { surface, sessions, denials, total }
+    const _sessSurf = new Map();  // session_id -> surface label
+    const _surfOf = (x) => x.surface || x.entrypoint || "Unknown";
+    sessions.forEach((x) => {
+      const sf = _surfOf(x);
+      if (x.session_id) _sessSurf.set(x.session_id, sf);
+      const e = _surfMap.get(sf) || { surface: sf, sessions: 0, denials: 0, total: 0 };
+      e.sessions += 1; _surfMap.set(sf, e);
+    });
+    agentDecs.forEach((d) => {
+      const sf = _sessSurf.get(d.session_id) || "Unknown";
+      const e = _surfMap.get(sf) || { surface: sf, sessions: 0, denials: 0, total: 0 };
+      e.total += 1; if (d.effect !== "Permit") e.denials += 1; _surfMap.set(sf, e);
+    });
+    const surfaceInsights = Array.from(_surfMap.values()).map((e) => ({
+      surface: e.surface, sessions: e.sessions,
+      denyPct: e.total ? Math.round((e.denials / e.total) * 100) : 0,
+    }));
+    const _reasonMap = {};
+    agentDecs.filter((d) => d.effect !== "Permit").forEach((d) => { const b = denyBucket(d); _reasonMap[b] = (_reasonMap[b] || 0) + 1; });
+    const _reasonTotal = Object.values(_reasonMap).reduce((a, b) => a + b, 0);
+    const denyReasons = Object.keys(_reasonMap)
+      .map((k) => ({ label: k, count: _reasonMap[k], pct: _reasonTotal ? Math.round((_reasonMap[k] / _reasonTotal) * 100) : 0 }))
+      .sort((a, b) => b.pct - a.pct);
     const myEmail = firstNonEmpty("oauth_email") || firstNonEmpty("user_email") || u;
     const jit = svids
       .filter((sv) => sameEmailJs(sv.developer_email, myEmail) || sameEmailJs(sv.developer_email, u))
@@ -280,6 +305,7 @@ function deriveAll(s) {
       jiraTicket: latest.jira_ticket_id || "",
       enrolledAt: latest.enrolled_at || "",
       sessionsList: sessions,
+      surfaceInsights, denyReasons,
       budget: { used: Math.min(spawnUsed, 5), max: 5, note: state === "Spawn-capped" ? "budget reached this session" : (trust <= 60 ? "blocked — trust " + trust + " ≤ 60" : "") },
       tools: tools.length ? tools : ["ReadFile", "EditFile", "RunBash", "WriteFile"],
       mcp: (latest.mcp_servers_discovered || []).slice(0, 6),
@@ -1055,7 +1081,7 @@ function Insights() {
   const reva = useReva();
   const ROSTER = reva.roster, RosterTable = window.RosterTable, AgentDetail = window.AgentDetail;
   const [by, setBy] = React.useState("Session");
-  const [pivot, setPivot] = React.useState("Identity");
+  const [panelMode, setPanelMode] = React.useState("details");
   const [filter, setFilter] = React.useState("all");
   const [selId, setSelId] = React.useState(ROSTER[0] ? ROSTER[0].id : null);
 
@@ -1146,13 +1172,12 @@ function Insights() {
           <span className="help">{filtered.length} of {ROSTER.length} principals</span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
             <Search placeholder="Search identities…" width={240} />
-            <Segmented options={["Identity", "Session"]} value={pivot} onChange={setPivot} />
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16, alignItems: "start" }}>
-          <RosterTable rows={filtered} selectedId={row ? row.id : null} onSelect={setSelId} />
+          <RosterTable rows={filtered} selectedId={row ? row.id : null} onSelect={setSelId} onView={(rid, mode) => { setSelId(rid); setPanelMode(mode); }} />
           {row
-            ? (pivot === "Session"
+            ? (panelMode === "sessions"
                 ? <SessionsPanel row={row} terminated={reva.terminated} />
                 : <AgentDetail row={row} />)
             : <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--ink-4)" }}>No identity selected.</div>}
@@ -1325,7 +1350,18 @@ const ROSTER = [
 
 const STATE_TONE = { "Active": "green", "Spawn-capped": "amber", "Quarantined": "red" };
 
-function RosterTable({ rows, selectedId, onSelect }) {
+function RosterTable({ rows, selectedId, onSelect, onView }) {
+  const [menu, setMenu] = React.useState(null); // { id, x, y }
+  React.useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    document.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => { document.removeEventListener("click", close); window.removeEventListener("scroll", close, true); };
+  }, [menu]);
+  const openMenu = (e, rid) => { e.stopPropagation(); const b = e.currentTarget.getBoundingClientRect(); setMenu({ id: rid, x: b.right - 172, y: b.bottom + 6 }); };
+  const view = (rid, mode) => { setMenu(null); if (onView) onView(rid, mode); else onSelect(rid); };
+  const mi = { display: "flex", alignItems: "center", gap: 9, width: "100%", border: 0, background: "transparent", font: "inherit", fontFamily: "inherit", fontSize: 13, fontWeight: 500, color: "var(--ink-2)", padding: "9px 10px", borderRadius: 8, cursor: "pointer", textAlign: "left" };
   return (
     <div className="card" style={{ overflow: "hidden" }}>
       <table className="tbl">
@@ -1354,7 +1390,11 @@ function RosterTable({ rows, selectedId, onSelect }) {
               <td className="right mono" style={{ fontWeight: 600 }}>{r.sessions}</td>
               <td><TrustMeter value={r.trust} /></td>
               <td><Pill tone={STATE_TONE[r.state]} dot>{r.state}</Pill></td>
-              <td className="right"><Kebab /></td>
+              <td className="right">
+                <button className="kebab" aria-label="Actions" onClick={(e) => openMenu(e, r.id)}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" /></svg>
+                </button>
+              </td>
             </tr>
           ))}
           {rows.length === 0 && (
@@ -1362,6 +1402,17 @@ function RosterTable({ rows, selectedId, onSelect }) {
           )}
         </tbody>
       </table>
+      {menu && (
+        <div onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: menu.x, top: menu.y, zIndex: 60, minWidth: 172,
+          background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "0 8px 28px rgba(16,24,40,.14),0 2px 6px rgba(16,24,40,.06)", padding: 6 }}>
+          <button style={mi} onClick={() => view(menu.id, "details")} onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+            <Icon name="user" size={15} /> View Details
+          </button>
+          <button style={mi} onClick={() => view(menu.id, "sessions")} onMouseEnter={(e) => (e.currentTarget.style.background = "var(--surface-2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+            <Icon name="list" size={15} /> View Sessions
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1513,6 +1564,58 @@ function AgentDetail({ row }) {
             ))}
           </div>
         )}
+
+        {(() => {
+          const surf = row.surfaceInsights || [];
+          const reasons = row.denyReasons || [];
+          if (!surf.length && !reasons.length) return null;
+          const REASON_COLORS = { "Prompt Injection": "#DC2626", "Intent Drift": "#F59E0B", "Low Trust": "#7C3AED", "Quarantine": "#0EA5E9", "Policy Denial": "#64748B" };
+          const maxSess = Math.max(1, ...surf.map((s) => s.sessions));
+          const topS = surf.slice().sort((a, b) => b.sessions - a.sessions)[0];
+          const topD = surf.slice().sort((a, b) => b.denyPct - a.denyPct)[0];
+          const eyebrow = { fontSize: 11, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.4px" };
+          const barRow = (label, widthPct, num, color) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+              <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 600, width: 88 }}>{label}</span>
+              <span style={{ flex: 1, height: 9, borderRadius: 999, background: "var(--surface-3)", overflow: "hidden" }}>
+                <span style={{ display: "block", height: "100%", borderRadius: 999, width: widthPct + "%", background: color }} />
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--ink)", width: 46, textAlign: "right" }}>{num}</span>
+            </div>
+          );
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 18, borderTop: "1px solid var(--border)", paddingTop: 16, marginTop: 2 }}>
+              {surf.length > 0 && (
+                <div>
+                  <div style={eyebrow}>Sessions by Access Surface</div>
+                  {surf.map((s) => barRow(s.surface, Math.round((s.sessions / maxSess) * 100), s.sessions, "var(--blue)"))}
+                  {topS && <div className="help" style={{ marginTop: 6 }}>Most sessions via <b style={{ color: "var(--ink)" }}>{topS.surface}</b></div>}
+                </div>
+              )}
+              {surf.length > 0 && (
+                <div>
+                  <div style={eyebrow}>Deny Rate by Access Surface</div>
+                  {surf.map((s) => barRow(s.surface, s.denyPct, s.denyPct + "%", "var(--red)"))}
+                  {topD && <div className="help" style={{ marginTop: 6 }}>Highest denials via <b style={{ color: "var(--ink)" }}>{topD.surface}</b> ({topD.denyPct}%)</div>}
+                </div>
+              )}
+              {reasons.length > 0 && (
+                <div>
+                  <div style={eyebrow}>Deny Reasons</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 8 }}>
+                    {reasons.map((r) => (
+                      <div key={r.label} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                        <span style={{ width: 9, height: 9, borderRadius: 2, flex: "none", background: REASON_COLORS[r.label] || "#64748B" }} />
+                        <span style={{ color: "var(--ink-2)" }}>{r.label}</span>
+                        <span className="mono" style={{ marginLeft: "auto", fontWeight: 700, color: "var(--ink)" }}>{r.pct}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
