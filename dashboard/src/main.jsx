@@ -1081,20 +1081,21 @@ function Insights() {
   const reva = useReva();
   const ROSTER = reva.roster, RosterTable = window.RosterTable, AgentDetail = window.AgentDetail;
   const [by, setBy] = React.useState("Session");
-  const [panelMode, setPanelMode] = React.useState("details");
+  const [drawer, setDrawer] = React.useState({ open: false, mode: "details", rid: null });
   const [filter, setFilter] = React.useState("all");
   const [selId, setSelId] = React.useState(ROSTER[0] ? ROSTER[0].id : null);
 
   const count = (key) => ROSTER.filter(FILTERS[key].test).length;
   const filtered = ROSTER.filter(FILTERS[filter].test);
   const row = filtered.find((r) => r.id === selId) || filtered[0];
+  const drawerRow = ROSTER.find((r) => r.id === drawer.rid) || null;
 
   const pickFilter = (key) => {
     setFilter(key);
     const first = ROSTER.filter(FILTERS[key].test)[0];
     if (first) setSelId(first.id);
   };
-  const pickIdentity = (rid) => { setFilter("all"); setSelId(rid); };
+  const pickIdentity = (rid) => { setFilter("all"); setSelId(rid); setDrawer({ open: true, mode: "details", rid }); };
 
   const denyLegend = reva.denyDonut.legend;
   const highDeny = reva.highDeny;
@@ -1174,14 +1175,7 @@ function Insights() {
             <Search placeholder="Search identities…" width={240} />
           </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16, alignItems: "start" }}>
-          <RosterTable rows={filtered} selectedId={row ? row.id : null} onSelect={setSelId} onView={(rid, mode) => { setSelId(rid); setPanelMode(mode); }} />
-          {row
-            ? (panelMode === "sessions"
-                ? <SessionsPanel row={row} terminated={reva.terminated} />
-                : <AgentDetail row={row} />)
-            : <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--ink-4)" }}>No identity selected.</div>}
-        </div>
+        <RosterTable rows={filtered} selectedId={drawer.open ? drawer.rid : selId} onSelect={setSelId} onView={(rid, mode) => setDrawer({ open: true, mode, rid })} />
       </div>
 
       {/* usage bars */}
@@ -1201,6 +1195,15 @@ function Insights() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* slide-over: developer details / sessions (closed by default, opened from the kebab) */}
+      <div onClick={() => setDrawer((d) => ({ ...d, open: false }))} style={{ position: "fixed", inset: 0, background: "rgba(11,18,32,.28)", opacity: drawer.open ? 1 : 0, pointerEvents: drawer.open ? "auto" : "none", transition: "opacity .25s", zIndex: 70 }} />
+      <div style={{ position: "fixed", top: 0, right: 0, height: "100vh", width: 480, maxWidth: "94vw", background: "var(--surface)", boxShadow: "-16px 0 40px rgba(16,24,40,0.10)", transform: drawer.open ? "translateX(0)" : "translateX(100%)", transition: "transform .28s cubic-bezier(.22,.61,.36,1)", zIndex: 71, display: "flex", flexDirection: "column" }}>
+        {drawerRow && (drawer.mode === "sessions"
+          ? <SessionsPanel row={drawerRow} terminated={reva.terminated} embedded />
+          : <AgentDetail row={drawerRow} embedded />)}
+        <button onClick={() => setDrawer((d) => ({ ...d, open: false }))} aria-label="Close" style={{ position: "absolute", top: 15, right: 16, border: 0, background: "transparent", color: "var(--ink-4)", fontSize: 24, lineHeight: 1, cursor: "pointer", zIndex: 2 }}>×</button>
       </div>
 
       <style>{`.hd-row:hover{background:var(--surface-2);} .kpi:hover{border-color:var(--border-strong);}`}</style>
@@ -1450,7 +1453,7 @@ function Field({ label, children, mono }) {
   );
 }
 
-function AgentDetail({ row }) {
+function AgentDetail({ row, embedded }) {
   const quarantined = row.state === "Quarantined";
   const mcpList = Array.from(new Set((row.sessionsList || []).flatMap((s) => s.mcp_servers_discovered || []).filter(Boolean)));
   const [appr, setAppr] = React.useState("idle"); // idle | sending | sent | noslack | error
@@ -1470,7 +1473,7 @@ function AgentDetail({ row }) {
       .catch(() => setAppr("error"));
   };
   return (
-    <div className="card" style={{ overflow: "hidden", position: "sticky", top: 60 }}>
+    <div className={embedded ? "" : "card"} style={embedded ? { overflow: "hidden", height: "100vh", display: "flex", flexDirection: "column", background: "var(--surface)" } : { overflow: "hidden", position: "sticky", top: 60 }}>
       <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 11 }}>
         <span style={{ width: 34, height: 34, borderRadius: 9, flex: "none", display: "grid", placeItems: "center",
           background: "var(--blue-tint)", color: "var(--blue-700)" }}>
@@ -1482,7 +1485,7 @@ function AgentDetail({ row }) {
         </div>
       </div>
 
-      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16, maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
+      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16, overflowY: "auto", ...(embedded ? { flex: 1 } : { maxHeight: "calc(100vh - 220px)" }) }}>
         {quarantined && (
           <div style={{ background: "var(--red-tint)", border: "1px solid #F5C2C2", borderRadius: 10, padding: "12px 14px" }}>
             <div style={{ display: "flex", gap: 9 }}>
@@ -1621,7 +1624,7 @@ function AgentDetail({ row }) {
   );
 }
 
-function SessionsPanel({ row, terminated }) {
+function SessionsPanel({ row, terminated, embedded }) {
   const termSet = new Set(terminated || []);
   const sessions = row.sessionsList || [];
   const relTimeP = (iso) => {
@@ -1631,7 +1634,7 @@ function SessionsPanel({ row, terminated }) {
     const h = Math.floor(m / 60); if (h < 24) return h + "h ago"; return Math.floor(h / 24) + "d ago";
   };
   return (
-    <div className="card" style={{ overflow: "hidden", position: "sticky", top: 60 }}>
+    <div className={embedded ? "" : "card"} style={embedded ? { overflow: "hidden", height: "100vh", display: "flex", flexDirection: "column", background: "var(--surface)" } : { overflow: "hidden", position: "sticky", top: 60 }}>
       <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 11 }}>
         <span style={{ width: 34, height: 34, borderRadius: 9, flex: "none", display: "grid", placeItems: "center", background: "var(--blue-tint)", color: "var(--blue-700)" }}>
           <Icon name="list" size={19} />
@@ -1641,7 +1644,7 @@ function SessionsPanel({ row, terminated }) {
           <div className="mono" style={{ fontSize: 11.5, color: "var(--ink-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.id}</div>
         </div>
       </div>
-      <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, maxHeight: "calc(100vh - 220px)", overflowY: "auto" }}>
+      <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, overflowY: "auto", ...(embedded ? { flex: 1 } : { maxHeight: "calc(100vh - 220px)" }) }}>
         {sessions.length === 0 && <div className="help" style={{ textAlign: "center", padding: 20 }}>No active sessions.</div>}
         {sessions.map((sx) => {
           const isTerm = termSet.has(sx.session_id);
