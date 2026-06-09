@@ -350,6 +350,10 @@ app.use('/api', insightsRouter);
 import { aaiRouter } from './api/aai';
 app.use('/api', aaiRouter);
 
+// Ask Reva AI — Bedrock-backed threat-hunting assistant. Route: POST /api/ask
+import { askRouter } from './api/ask';
+app.use('/api', askRouter);
+
 // Classification config routes
 import { getCommandRules, setCommandRules, getFileZoneRules, setFileZoneRules } from './api/pdpEvaluate';
 import { getAllBlocks } from './api/intentClassifier';

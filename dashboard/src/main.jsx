@@ -4033,12 +4033,130 @@ function PageHeader() {
   );
 }
 
-function TabBar({ active, onChange }) {
+const ASK_WELCOME = "I'm Reva AI — your threat-hunting assistant. I investigate the live governance data across your agents: identities, sessions, decisions, trust, and quarantines. Ask an investigative question and I'll answer with a short summary and tables.";
+const ASK_EXAMPLES = [
+  "Which sessions have a git committer email that doesn't match the authenticated user?",
+  "Find any secret-zone file read followed by an external connection or MCP write.",
+  "Which identities are degrading toward lockout but aren't quarantined yet?",
+  "Walk me through what the quarantined agent was trying to do.",
+];
+
+function AskRevaButton({ onClick }) {
+  const [hover, setHover] = React.useState(false);
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center", marginRight: 8, flex: "none" }}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button onClick={onClick} aria-label="Ask Reva AI" style={{
+        width: 34, height: 34, borderRadius: 9, border: 0, cursor: "pointer",
+        background: "linear-gradient(150deg,#2563EB,#7C3AED)", color: "#fff",
+        display: "grid", placeItems: "center", boxShadow: "0 2px 8px rgba(124,58,237,.28)" }}>
+        <Icon name="sparkles" size={18} />
+      </button>
+      {hover && (
+        <span style={{ position: "absolute", top: "50%", left: 42, transform: "translateY(-50%)",
+          background: "var(--ink)", color: "#fff", fontSize: 12, fontWeight: 600, padding: "5px 9px",
+          borderRadius: 7, whiteSpace: "nowrap", zIndex: 90, boxShadow: "var(--shadow-pop)", pointerEvents: "none" }}>Ask Reva AI</span>
+      )}
+    </div>
+  );
+}
+
+function AskAnswer({ m }) {
+  return (
+    <div style={{ alignSelf: "stretch", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 12, padding: "12px 14px" }}>
+      {m.summary && <div style={{ fontSize: 13.5, color: "var(--ink)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{m.summary}</div>}
+      {(m.tables || []).map((t, ti) => (
+        <div key={ti} style={{ marginTop: 12 }}>
+          {t.title && <div className="eyebrow" style={{ fontSize: 10.5, marginBottom: 6 }}>{t.title}</div>}
+          <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: 10 }}>
+            <table className="tbl" style={{ minWidth: "100%" }}>
+              <thead><tr>{(t.columns || []).map((c, ci) => <th key={ci}>{c}</th>)}</tr></thead>
+              <tbody>
+                {(t.rows || []).map((r, ri) => (
+                  <tr key={ri}>{(r || []).map((cell, cci) => <td key={cci} style={{ fontSize: 12.5 }}>{String(cell)}</td>)}</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+      {m.note && <div className="help" style={{ marginTop: 10, fontStyle: "italic" }}>{m.note}</div>}
+    </div>
+  );
+}
+
+function AskReva({ open, onClose }) {
+  const [msgs, setMsgs] = React.useState([{ role: "assistant", summary: ASK_WELCOME, tables: [] }]);
+  const [input, setInput] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const listRef = React.useRef(null);
+  React.useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; }, [msgs, loading]);
+
+  const ask = async (text) => {
+    const q = (text || "").trim();
+    if (!q || loading) return;
+    const history = msgs.filter((m) => m.role === "user" || m.role === "assistant").slice(-6)
+      .map((m) => ({ role: m.role, text: m.role === "user" ? m.text : m.summary }));
+    setMsgs((m) => [...m, { role: "user", text: q }]);
+    setInput(""); setLoading(true);
+    try {
+      const r = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q, history }) });
+      const d = await r.json();
+      setMsgs((m) => [...m, { role: "assistant", summary: d.summary || "No response.", tables: d.tables || [], note: d.note }]);
+    } catch (e) {
+      setMsgs((m) => [...m, { role: "assistant", summary: "Couldn't reach the assistant. Please try again.", tables: [] }]);
+    } finally { setLoading(false); }
+  };
+  const onKey = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(input); } };
+  const showExamples = msgs.length === 1;
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(11,18,32,.28)", opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none", transition: "opacity .25s", zIndex: 80 }} />
+      <div style={{ position: "fixed", top: 0, right: 0, height: "100vh", width: 460, maxWidth: "94vw", background: "var(--surface)", boxShadow: "-16px 0 40px rgba(16,24,40,0.10)", transform: open ? "translateX(0)" : "translateX(100%)", transition: "transform .28s cubic-bezier(.22,.61,.36,1)", zIndex: 81, display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 11 }}>
+          <span style={{ width: 34, height: 34, borderRadius: 9, flex: "none", display: "grid", placeItems: "center", background: "linear-gradient(150deg,#2563EB,#7C3AED)", color: "#fff" }}><Icon name="sparkles" size={18} /></span>
+          <div style={{ minWidth: 0 }}>
+            <div className="section-title" style={{ fontSize: 14.5 }}>Ask Reva AI</div>
+            <div className="help" style={{ fontSize: 11.5 }}>Threat-hunting assistant</div>
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{ marginLeft: "auto", border: 0, background: "transparent", color: "var(--ink-4)", fontSize: 24, lineHeight: 1, cursor: "pointer" }}>×</button>
+        </div>
+
+        <div ref={listRef} style={{ flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+          {msgs.map((m, i) => (
+            m.role === "user"
+              ? <div key={i} style={{ alignSelf: "flex-end", maxWidth: "82%", background: "var(--blue)", color: "#fff", borderRadius: 12, padding: "9px 13px", fontSize: 13.5, lineHeight: 1.5 }}>{m.text}</div>
+              : <AskAnswer key={i} m={m} />
+          ))}
+          {loading && <div style={{ alignSelf: "flex-start", color: "var(--ink-3)", fontSize: 13 }}>Investigating…</div>}
+          {showExamples && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 4 }}>
+              <div className="eyebrow" style={{ fontSize: 10 }}>Try a hunt</div>
+              {ASK_EXAMPLES.map((ex, i) => (
+                <button key={i} onClick={() => ask(ex)} style={{ textAlign: "left", border: "1px solid var(--border)", background: "var(--surface)", borderRadius: 10, padding: "9px 11px", fontSize: 12.5, color: "var(--ink-2)", cursor: "pointer", fontFamily: "inherit" }}>{ex}</button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ borderTop: "1px solid var(--border)", padding: 12, display: "flex", gap: 8, alignItems: "flex-end" }}>
+          <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} rows={1} placeholder="Ask a hunting question…"
+            style={{ flex: 1, resize: "none", border: "1px solid var(--border-strong)", borderRadius: 10, padding: "10px 12px", fontSize: 13.5, fontFamily: "inherit", color: "var(--ink)", outline: "none", maxHeight: 120 }} />
+          <button onClick={() => ask(input)} disabled={loading || !input.trim()} className="btn btn-primary btn-sm" style={{ height: 38, opacity: loading || !input.trim() ? 0.5 : 1 }}><Icon name="send" size={15} /></button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function TabBar({ active, onChange, onAsk }) {
   const ref = React.useRef(null);
   return (
     <div style={{ padding: "0 32px", marginTop: 18, background: "#fff", borderBottom: "1px solid var(--border)",
       position: "sticky", top: 0, zIndex: 4 }}>
-      <div ref={ref} style={{ display: "flex", gap: 4, overflowX: "auto", scrollbarWidth: "none" }}>
+      <div ref={ref} style={{ display: "flex", alignItems: "center", gap: 4, overflowX: "auto", scrollbarWidth: "none" }}>
+        <AskRevaButton onClick={onAsk} />
         {TABS.map((t) => {
           const on = t === active;
           return (
@@ -4074,6 +4192,7 @@ function Placeholder({ name }) {
 function App() {
   const [nav, setNav] = React.useState("home");
   const [tab, setTab] = React.useState("Insights");
+  const [askOpen, setAskOpen] = React.useState(false);
   const scrollRef = React.useRef(null);
   const isIntegrations = nav === "integrations";
   const isHome = nav === "home";
@@ -4119,7 +4238,7 @@ function App() {
           ) : (
             <>
               <PageHeader />
-              <TabBar active={tab} onChange={setTab} />
+              <TabBar active={tab} onChange={setTab} onAsk={() => setAskOpen(true)} />
               <div style={{ flex: 1 }}>
                 {Active ? <Active /> : <Placeholder name={tab} />}
               </div>
@@ -4127,6 +4246,7 @@ function App() {
           )}
         </div>
       </div>
+      <AskReva open={askOpen} onClose={() => setAskOpen(false)} />
     </div>
   );
 }
