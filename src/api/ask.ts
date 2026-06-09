@@ -1,7 +1,7 @@
 // ============================================================================
 // Reva — "Ask Reva AI"  (src/api/ask.ts)
 // ----------------------------------------------------------------------------
-// A threat-hunting assistant for security analysts. Assembles a live snapshot of
+// AI Governance Assistant. Assembles a live snapshot of
 // the in-memory governance stores (sessions, decisions, quarantines, SVID/JIT),
 // sends it to Claude on AWS Bedrock with a grounded system prompt, and returns a
 // structured { summary, tables[] } answer the chat renders natively.
@@ -41,7 +41,7 @@ function buildSnapshot() {
       connection_type: s.connection_type || null, ssh_client_ip: s.ssh_client_ip || null,
       os: s.os_type || s.remote_os || null, hostname: s.hostname || null, model: s.model || null,
       project: s.project_name || null, git_branch: s.git_branch || null,
-      // identity surfaces — divergence between these is a hunting signal
+      // identity surfaces — divergence between these is a governance signal
       authenticated_oauth_email: s.oauth_email || s.user_email || null,
       git_email: s.git_email || null, jira_assignee_email: s.jira_assignee_email || null,
       account_uuid: s.account_uuid || null, org_uuid: s.org_uuid || null,
@@ -83,17 +83,31 @@ function buildSnapshot() {
   return { generatedAt: new Date().toISOString(), sessions, decisions, quarantines, svids };
 }
 
-const SYSTEM_PROMPT = `You are Reva AI, a threat-hunting assistant embedded in the Reva governance console for AI coding agents (Claude Code, Codex, Kiro). You help security analysts and threat hunters investigate the LIVE governance data provided below.
+const SYSTEM_PROMPT = `You are Reva AI, the AI Governance Assistant embedded in the Reva console for agentic workloads (Claude Code, Codex, Kiro). You help teams understand and manage how their AI agents are governed, using the LIVE governance data provided below.
 
 RULES:
 - Answer ONLY from the DATA snapshot. Never invent identities, sessions, decisions, or findings. If something is not in the data, do not assert it.
-- Think like a hunter: correlate across sessions, decisions, identity fields, time, and trace ids. Surface identity divergence (oauth vs git vs jira email mismatch), anomalous action sequences (e.g. secret-zone read followed by external/MCP write), lateral movement and delegation abuse, credential/JIT misuse, injection patterns hitting multiple identities, rising intent-drift, and blast radius. Do NOT simply restate aggregate counts that a dashboard already shows.
+- Reason across the data to answer questions about agentic workloads, access and policy decisions, identity and ownership, trust, behavioral anomalies, and quarantined access. Correlate across sessions, decisions, identity fields, time, and trace ids where it helps — e.g. access that no longer matches an identity, agents reaching scope outside their registered tools, activity diverging from declared intent, repeated policy denials, or credential/JIT use. Go beyond aggregate counts a dashboard already shows.
 - If the data is insufficient to answer, say so plainly in "summary" and return an empty "tables" array. Never fabricate rows to fill a table.
 - Respond with ONLY a single JSON object and nothing else (no prose, no markdown fences):
-{"summary":"2-5 sentence investigative answer","tables":[{"title":"string","columns":["col1","col2"],"rows":[["v1","v2"]]}],"note":"optional one-line caveat or suggested next step"}
-- Keep each table focused: only the columns and rows relevant to the finding. Use "tables":[] when no table is warranted.`;
+{"summary":"2-5 sentence answer","tables":[{"title":"string","columns":["col1","col2"],"rows":[["v1","v2"]]}],"note":"optional one-line caveat or suggested next step"}
+- Keep each table focused: only the columns and rows relevant to the answer. Use "tables":[] when no table is warranted.`;
 
 export const askRouter = Router();
+
+// Starter content for the chat window — product + dashboard both fetch this so
+// the welcome message and suggested questions come from one source of truth.
+const WELCOME = "Welcome to Reva AI — your AI Governance Assistant. Ask about agentic workloads, access and policy decisions, behavioral anomaly analysis, and quarantined access across your environment.";
+const EXAMPLES = [
+  "Which agents hold access that no longer matches their owner or assigned identity?",
+  "Show agents whose trust has dropped and what access they still hold.",
+  "Summarize the access decisions for the most recently isolated agent.",
+  "Where did an agent's recent activity diverge from its declared intent?",
+];
+
+askRouter.get('/ask/welcome', (_req, res) => {
+  res.json({ welcome: WELCOME, examples: EXAMPLES });
+});
 
 askRouter.post('/ask', async (req, res) => {
   const question = String((req.body && req.body.question) || '').trim();

@@ -4033,12 +4033,12 @@ function PageHeader() {
   );
 }
 
-const ASK_WELCOME = "I'm Reva AI — your threat-hunting assistant. I investigate the live governance data across your agents: identities, sessions, decisions, trust, and quarantines. Ask an investigative question and I'll answer with a short summary and tables.";
+const ASK_WELCOME = "Welcome to Reva AI — your AI Governance Assistant. Ask about agentic workloads, access and policy decisions, behavioral anomaly analysis, and quarantined access across your environment.";
 const ASK_EXAMPLES = [
-  "Which sessions have a git committer email that doesn't match the authenticated user?",
-  "Find any secret-zone file read followed by an external connection or MCP write.",
-  "Which identities are degrading toward lockout but aren't quarantined yet?",
-  "Walk me through what the quarantined agent was trying to do.",
+  "Which agents hold access that no longer matches their owner or assigned identity?",
+  "Show agents whose trust has dropped and what access they still hold.",
+  "Summarize the access decisions for the most recently isolated agent.",
+  "Where did an agent's recent activity diverge from its declared intent?",
 ];
 
 function AskRevaButton({ onClick }) {
@@ -4086,10 +4086,21 @@ function AskAnswer({ m }) {
 }
 
 function AskReva({ open, onClose }) {
+  const [welcome, setWelcome] = React.useState(ASK_WELCOME);
+  const [examples, setExamples] = React.useState(ASK_EXAMPLES);
   const [msgs, setMsgs] = React.useState([{ role: "assistant", summary: ASK_WELCOME, tables: [] }]);
   const [input, setInput] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const listRef = React.useRef(null);
+  React.useEffect(() => {
+    let alive = true;
+    fetch("/api/ask/welcome").then((r) => r.json()).then((d) => {
+      if (!alive || !d) return;
+      if (d.welcome) { setWelcome(d.welcome); setMsgs((m) => (m.length === 1 && m[0].role === "assistant") ? [{ role: "assistant", summary: d.welcome, tables: [] }] : m); }
+      if (Array.isArray(d.examples) && d.examples.length) setExamples(d.examples);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
   React.useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; }, [msgs, loading]);
 
   const ask = async (text) => {
@@ -4118,7 +4129,7 @@ function AskReva({ open, onClose }) {
           <span style={{ width: 34, height: 34, borderRadius: 9, flex: "none", display: "grid", placeItems: "center", background: "linear-gradient(150deg,#2563EB,#7C3AED)", color: "#fff" }}><Icon name="sparkles" size={18} /></span>
           <div style={{ minWidth: 0 }}>
             <div className="section-title" style={{ fontSize: 14.5 }}>Ask Reva AI</div>
-            <div className="help" style={{ fontSize: 11.5 }}>Threat-hunting assistant</div>
+            <div className="help" style={{ fontSize: 11.5 }}>AI Governance Assistant</div>
           </div>
           <button onClick={onClose} aria-label="Close" style={{ marginLeft: "auto", border: 0, background: "transparent", color: "var(--ink-4)", fontSize: 24, lineHeight: 1, cursor: "pointer" }}>×</button>
         </div>
@@ -4132,8 +4143,8 @@ function AskReva({ open, onClose }) {
           {loading && <div style={{ alignSelf: "flex-start", color: "var(--ink-3)", fontSize: 13 }}>Investigating…</div>}
           {showExamples && (
             <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 4 }}>
-              <div className="eyebrow" style={{ fontSize: 10 }}>Try a hunt</div>
-              {ASK_EXAMPLES.map((ex, i) => (
+              <div className="eyebrow" style={{ fontSize: 10 }}>Suggested Questions</div>
+              {examples.map((ex, i) => (
                 <button key={i} onClick={() => ask(ex)} style={{ textAlign: "left", border: "1px solid var(--border)", background: "var(--surface)", borderRadius: 10, padding: "9px 11px", fontSize: 12.5, color: "var(--ink-2)", cursor: "pointer", fontFamily: "inherit" }}>{ex}</button>
               ))}
             </div>
@@ -4141,7 +4152,7 @@ function AskReva({ open, onClose }) {
         </div>
 
         <div style={{ borderTop: "1px solid var(--border)", padding: 12, display: "flex", gap: 8, alignItems: "flex-end" }}>
-          <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} rows={1} placeholder="Ask a hunting question…"
+          <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKey} rows={1} placeholder="Ask a question…"
             style={{ flex: 1, resize: "none", border: "1px solid var(--border-strong)", borderRadius: 10, padding: "10px 12px", fontSize: 13.5, fontFamily: "inherit", color: "var(--ink)", outline: "none", maxHeight: 120 }} />
           <button onClick={() => ask(input)} disabled={loading || !input.trim()} className="btn btn-primary btn-sm" style={{ height: 38, opacity: loading || !input.trim() ? 0.5 : 1 }}><Icon name="send" size={15} /></button>
         </div>
