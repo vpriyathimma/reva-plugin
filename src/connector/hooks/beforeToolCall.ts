@@ -556,29 +556,6 @@ export async function handleToolCall(req: Request, res: Response) {
       console.log(`[Drift] kind=${kind}${mcpEgressDrift ? ' (mcp-egress)' : ''} agent="${derivedAgentName}" asked="${(declaredScope || initialScope).slice(0, 50)}" target="${String(actionTarget).slice(0, 50)}" → deny${reduces_trust ? ` + trust-${intent_drift_score}` : ' (no trust hit)'}`);
     }
 
-    // MCP tools route through buildMCPToolPayload, which sends only principal + action
-    // (MCPWrite) + resource to Cedar — it does NOT carry the intent-drift context, so
-    // Cedar cannot deny on drift for an MCP tool. Enforce the deny here in the hook
-    // (same pattern as the quarantine / spawn / deny-rate hard-denies above) so MCP
-    // write/communicate egress under a read/review intent is actually blocked.
-    if (intentDriftEnabled && is_intent_drift && tool_name.startsWith('mcp__')) {
-      console.log(`[INTENT-DRIFT] MCP tool blocked: ${user_email} ${tool_name} (declared=${promptIntent} → action=${result.intent})`);
-      logDecision({
-        timestamp: new Date().toISOString(), session_id, user_email,
-        tool: tool_name, server: server_name || 'claude-code', sensitivity: 'high',
-        effect: 'Deny', reason: 'Intent Drift Validation', intent: promptIntent,
-        agent_type: derivedAgentType === 'subagent' ? 'subagent' : 'main',
-      });
-      return res.json({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason: 'This action falls outside the scope of what was requested for this task and has been blocked.',
-        },
-        reva: { effect: 'Deny', reason: 'Intent Drift Validation' },
-      });
-    }
-
     // ── Cedar PDP evaluation ──────────────────────────────────────
     // Route MCP tools to buildMCPToolPayload
     const isMCPTool = tool_name.startsWith('mcp__');
