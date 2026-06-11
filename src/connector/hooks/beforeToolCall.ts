@@ -522,7 +522,7 @@ export async function handleToolCall(req: Request, res: Response) {
     // intent context attributes flow into Cedar, and no intent-drift entry is
     // logged. When ON, behaviour is unchanged.
     const intentDriftEnabled = isEnabled('intent_drift');
-    const baseDrift = intentDriftEnabled
+    const drift = intentDriftEnabled
       ? checkIntentDrift({
           target:         String(actionTarget),
           tool_name,
@@ -530,30 +530,19 @@ export async function handleToolCall(req: Request, res: Response) {
           initial_scope:  initialScope,
         })
       : { is_intent_drift: false, intent_drift_score: 0, reduces_trust: false };
-    // Egress drift: a read/review-class intent that performs an MCP write/communicate
-    // action (e.g. Gmail create_draft / send) — the agent reached an external MCP tool
-    // that mutates or sends data when only a read or review was asked. checkIntentDrift
-    // is file/path-scoped and won't catch MCP tools, so we add it here. Treated as
-    // drastic drift → Cedar denies (via isIntentDrift) and trust erodes.
-    const mcpEgressDrift =
-      intentDriftEnabled &&
-      tool_name.startsWith('mcp__') &&
-      ['read', 'govern'].includes(promptIntent) &&
-      ['write', 'modify', 'destructive', 'communicate', 'exfiltrate'].includes(result.intent);
-    const is_intent_drift    = baseDrift.is_intent_drift || mcpEgressDrift;
-    const reduces_trust      = baseDrift.reduces_trust || mcpEgressDrift;
-    const intent_drift_score = mcpEgressDrift ? Math.max(baseDrift.intent_drift_score, 60) : baseDrift.intent_drift_score;
+    const { is_intent_drift, intent_drift_score } = drift;
     if (intentDriftEnabled && is_intent_drift) {
-      const kind = reduces_trust ? 'operation' : 'scope';
+      const kind = drift.reduces_trust ? 'operation' : 'scope';
       // Scope drift (out-of-scope target, still a read) → Cedar denies on
       // is_intent_drift, but NO trust penalty (containment, not a trust signal).
-      // Drastic drift (mutate/egress when only a read was asked) → deny AND erode trust.
-      if (reduces_trust) {
+      // Drastic drift (mutate when only a read was asked) → deny AND erode trust,
+      // like a prompt injection.
+      if (drift.reduces_trust) {
         const blk = { type: 'intent_drift' as const, prompt: String(actionTarget).slice(0, 200), score: intent_drift_score, timestamp: new Date().toISOString() };
         recordBlock(user_email, blk);
         if (agentIdForCtx && derivedAgentType === 'subagent') recordBlock(agentIdForCtx, blk);
       }
-      console.log(`[Drift] kind=${kind}${mcpEgressDrift ? ' (mcp-egress)' : ''} agent="${derivedAgentName}" asked="${(declaredScope || initialScope).slice(0, 50)}" target="${String(actionTarget).slice(0, 50)}" → deny${reduces_trust ? ` + trust-${intent_drift_score}` : ' (no trust hit)'}`);
+      console.log(`[Drift] kind=${kind} agent="${derivedAgentName}" asked="${(declaredScope || initialScope).slice(0, 50)}" target="${String(actionTarget).slice(0, 50)}" → deny${drift.reduces_trust ? ` + trust-${intent_drift_score}` : ' (no trust hit)'}`);
     }
 
     // ── Cedar PDP evaluation ──────────────────────────────────────
