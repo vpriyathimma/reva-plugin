@@ -16,6 +16,12 @@ export interface SVIDRecord {
   issued_by:       string;   // approver who triggered the issuance
   status:          'active' | 'expired' | 'revoked';
   jwt:             string;  // Real JWT SVID from SPIRE
+  // Session attachment — a JIT credential belongs to the session that earned it,
+  // not to the developer at large. Lets the dashboard render it under the session
+  // and lets quarantine/terminate revoke it by session or by (developer × agent).
+  session_id?:     string;
+  coding_agent?:   string;   // claude-code | codex | kiro
+  os_user?:        string;   // OS username, for agent-scoped revocation
 }
 
 // In-memory SVID store
@@ -34,6 +40,9 @@ export async function issueSVID(params: {
   spiffe_id:       string;
   issued_by:       string;
   account_uuid?:   string;
+  session_id?:     string;
+  coding_agent?:   string;
+  os_user?:        string;
 }): Promise<SVIDRecord> {
   const now = new Date();
   const expires = new Date(now.getTime() + SVID_TTL_MINUTES * 60 * 1000);
@@ -74,6 +83,9 @@ export async function issueSVID(params: {
     issued_by:       params.issued_by,
     status:          'active',
     jwt,
+    session_id:      params.session_id,
+    coding_agent:    params.coding_agent || 'claude-code',
+    os_user:         params.os_user,
   };
 
   const key = svidKey(params.developer_email, params.project);
@@ -113,6 +125,45 @@ export function revokeSVID(developerEmail: string, project: string): boolean {
   svidStore.set(key, svid);
   console.log(`[SVID] Revoked: ${svid.id} for ${developerEmail} on ${project}`);
   return true;
+}
+
+// ── Revoke every ACTIVE JIT credential attached to a session ──
+// Used when a session is terminated or quarantined: the credential dies with the
+// session. Expired/already-revoked records are left untouched.
+export function revokeSVIDsForSession(sessionId: string): number {
+  if (!sessionId) return 0;
+  let n = 0;
+  for (const [, svid] of svidStore) {
+    if (svid.session_id === sessionId && svid.status === 'active') {
+      svid.status = 'revoked';
+      n++;
+      console.log(`[SVID] Revoked (session terminated): ${svid.id} session=${sessionId}`);
+    }
+  }
+  return n;
+}
+
+// ── Revoke active JIT for a (developer × coding agent) ──
+// Quarantine is scoped to one coding agent, so only that agent's credentials are
+// revoked. `candidates` are the developer's identity forms (os_user, email,
+// local-part); any active SVID whose coding_agent matches and whose owner is in
+// `candidates` is revoked. Returns the number revoked.
+export function revokeSVIDsForAgent(candidates: string[], codingAgent: string): number {
+  const cand = new Set(candidates.filter(Boolean).map((c) => String(c).toLowerCase()));
+  const agent = codingAgent || 'claude-code';
+  let n = 0;
+  for (const [, svid] of svidStore) {
+    if (svid.status !== 'active') continue;
+    if ((svid.coding_agent || 'claude-code') !== agent) continue;
+    const owners = [svid.os_user, svid.developer_email, (svid.developer_email || '').split('@')[0]]
+      .filter(Boolean).map((o) => String(o).toLowerCase());
+    if (owners.some((o) => cand.has(o) || cand.has(o.split('@')[0]))) {
+      svid.status = 'revoked';
+      n++;
+      console.log(`[SVID] Revoked (quarantine): ${svid.id} agent=${agent} owner=${svid.developer_email}`);
+    }
+  }
+  return n;
 }
 
 // ── Get SVID details (for dashboard/logs) ──

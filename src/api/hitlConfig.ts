@@ -42,6 +42,9 @@ export interface ApprovalRecord {
   expires_at:      string;
   slack_ts?:       string;
   spiffe_id?:      string;
+  session_id?:     string;
+  coding_agent?:   string;
+  os_user?:        string;
 }
 
 const approvalStore = new Map<string, ApprovalRecord>();
@@ -154,12 +157,14 @@ export async function fetchSlackChannels(token: string): Promise<{ id: string; n
 // Send a quarantine reinstatement approval request to the configured channel.
 export async function sendQuarantineApprovalMessage(
   token: string, channel: string,
-  opts: { principal: string; policyName: string; approver?: string; detail?: string },
+  opts: { principal: string; codingAgent?: string; policyName: string; approver?: string; detail?: string },
 ): Promise<{ ok: boolean; error?: string; ts?: string }> {
   try {
+    const agent = opts.codingAgent || 'claude-code';
     const lines = [
       `:rotating_light: *Access reinstatement requested*`,
       `*Principal:* ${opts.principal}`,
+      `*Coding agent:* ${agent}`,
       `*Reason:* ${opts.policyName}`,
     ];
     if (opts.detail)   lines.push(`*Detail:* ${opts.detail}`);
@@ -170,8 +175,8 @@ export async function sendQuarantineApprovalMessage(
       blocks: [
         { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
         { type: 'actions', elements: [
-          { type: 'button', text: { type: 'plain_text', text: 'Approve & restore' }, style: 'primary', value: `approve:${opts.principal}`, action_id: 'reva_approve' },
-          { type: 'button', text: { type: 'plain_text', text: 'Deny' }, style: 'danger', value: `deny:${opts.principal}`, action_id: 'reva_deny' },
+          { type: 'button', text: { type: 'plain_text', text: 'Approve & restore' }, style: 'primary', value: `approve:${opts.principal}#${agent}`, action_id: 'reva_approve' },
+          { type: 'button', text: { type: 'plain_text', text: 'Deny' }, style: 'danger', value: `deny:${opts.principal}#${agent}`, action_id: 'reva_deny' },
         ] },
       ],
     });
@@ -316,11 +321,15 @@ export async function handleSlackInteraction(payload: any): Promise<{ ok: boolea
   if (actionId === 'reva_approve' || actionId === 'reva_deny') {
     const decision  = actionId === 'reva_approve' ? 'approve' : 'deny';
     const raw       = String(action.value || '');
-    const principal = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;       // user:saisrungaram
+    const body      = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;       // user:saisrungaram#claude-code
+    // Optional "#<codingAgent>" suffix carries the agent scope (default claude-code).
+    const hashIdx   = body.lastIndexOf('#');
+    const codingAgent = hashIdx >= 0 ? body.slice(hashIdx + 1) : 'claude-code';
+    const principal = hashIdx >= 0 ? body.slice(0, hashIdx) : body;                    // user:saisrungaram
     const osUser    = principal.startsWith('user:') ? principal.slice(5) : principal;  // saisrungaram
 
     if (decision === 'approve') {
-      try { require('./quarantine').reinstate(osUser); } catch (e) {}
+      try { require('./quarantine').reinstate(osUser, codingAgent); } catch (e) {}
     }
     const decidedText = decision === 'approve'
       ? `:white_check_mark: *Approved* by ${user} — access restored for \`${osUser}\`.`
@@ -365,6 +374,9 @@ export async function handleSlackInteraction(payload: any): Promise<{ ok: boolea
       project:         record.project,
       spiffe_id:       record.spiffe_id || '',
       issued_by:       user,
+      session_id:      record.session_id,
+      coding_agent:    record.coding_agent,
+      os_user:         record.os_user,
     });
     svidInfo = ` SVID issued: ${svid.id}, jwt=${svid.jwt ? 'yes' : 'no'}, expires ${svid.expires_at}`;
   }
@@ -424,6 +436,9 @@ export async function triggerHITL(details: {
   branch:          string;
   ticket:          string;
   spiffe_id?:      string;
+  session_id?:     string;
+  coding_agent?:   string;
+  os_user?:        string;
 }): Promise<ApprovalRecord> {
   const id = `hitl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date();

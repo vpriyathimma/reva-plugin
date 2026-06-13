@@ -89,14 +89,11 @@ function revaStart() {
   setInterval(revaRefetch, 15000);
 }
 
-// Session key matches the server's terminate key: "<oauth_email|user_email>::<hostname>".
-function sessionTermKey(sess) {
-  return `${sess.oauth_email || sess.user_email}::${sess.hostname || "unknown"}`;
-}
-async function revaTerminateSession(key, terminate) {
+// Session termination is keyed by session_id (the live hook id).
+async function revaTerminateSession(sessionId, terminate) {
   try {
     await fetch(terminate ? "/api/session/terminate" : "/api/session/restore", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId }),
     });
     await revaRefetch();
   } catch (e) {}
@@ -182,12 +179,15 @@ function deriveAll(s) {
   const qList = s.quarantine.quarantined || [];
   const cappedSessions = new Set(s.quarantine.capped_sessions || []);
   const termIds = new Set(s.terminated || []);  // terminated session_ids (per-session kill switch)
-  // Match a quarantine record against any of a developer's identity forms.
-  const quarantineFor = (u, sess) => {
+  // Match a quarantine record against a developer's identity forms, scoped to a
+  // coding agent. A Claude Code clip never marks the Codex/Kiro rows.
+  const quarantineFor = (u, sess, codingAgent) => {
     const cands = new Set([u, sess.user_email, sess.oauth_email,
       (sess.user_email || "").split("@")[0], (sess.oauth_email || "").split("@")[0]]
       .filter(Boolean).map((x) => String(x).toLowerCase()));
+    const agent = codingAgent || "claude-code";
     return qList.find((q) => {
+      if ((q.codingAgent || "claude-code") !== agent) return false;
       const qu = String(q.osUser || "").toLowerCase();
       return cands.has(qu) || cands.has(qu.split("@")[0]);
     }) || null;
@@ -230,7 +230,7 @@ function deriveAll(s) {
     const stableSpiffe = firstNonEmpty("spiffe_id");  // SPIFFE/SVID: once issued, stays static for the lifecycle
     const trust = (s.trust[u] && s.trust[u].trust != null) ? s.trust[u].trust
       : (s.trust[latest.user_email] && s.trust[latest.user_email].trust != null) ? s.trust[latest.user_email].trust : 70;
-    const qRec = quarantineFor(u, latest);
+    const qRec = quarantineFor(u, latest, codingAgent);
     const isQ = !!qRec;
     const capped = sessions.some((x) => cappedSessions.has(x.session_id));
     const state = isQ ? "Quarantined" : capped ? "Spawn-capped" : "Active";
@@ -269,22 +269,32 @@ function deriveAll(s) {
       .map((k) => ({ label: k, count: _reasonMap[k], pct: _reasonTotal ? Math.round((_reasonMap[k] / _reasonTotal) * 100) : 0 }))
       .sort((a, b) => b.pct - a.pct);
     const myEmail = firstNonEmpty("oauth_email") || firstNonEmpty("user_email") || u;
-    const jit = svids
-      .filter((sv) => sameEmailJs(sv.developer_email, myEmail) || sameEmailJs(sv.developer_email, u))
+    const nowMs = Date.now();
+    // SVIDs belonging to THIS (developer × coding agent), with derived lifecycle state.
+    const agentSvids = svids
+      .filter((sv) => (sv.coding_agent || "claude-code") === codingAgent &&
+        (sameEmailJs(sv.developer_email, myEmail) || sameEmailJs(sv.developer_email, u) ||
+         (sv.os_user ? sameEmailJs(sv.os_user, u) : false)))
       .map((sv) => ({
         id: sv.id, recipient: sv.developer_email, approver: sv.issued_by, action: sv.action,
         project: sv.project, issuedAt: sv.issued_at, expiresAt: sv.expires_at,
-        state: sv.status === "active" && new Date(sv.expires_at).getTime() < Date.now() ? "expired" : sv.status,
+        sessionId: sv.session_id || "",
+        state: sv.status === "active" && new Date(sv.expires_at).getTime() < nowMs ? "expired" : sv.status,
         spiffeId: sv.spiffe_id, hasJwt: !!sv.jwt,
       }));
-    const jitActive = jit.filter((j) => j.state === "active").length;
+    // Live JIT (active, non-expired) — shown in Developer Details and counted in the tile.
+    const jit = agentSvids.filter((j) => j.state === "active");
+    // Full ledger for this agent (incl. expired/revoked) — the Sessions view renders
+    // each credential against its session with the right state badge.
+    const jitAll = agentSvids;
+    const jitActive = jit.length;
     roster.push({
       id: principalOf(u) + "#" + codingAgent, principal: principalOf(u), codingAgent, surface: latest.surface || "", kind: "dev",
       email: firstNonEmpty("oauth_email") || firstNonEmpty("user_email") || u,
       model: latest.model || "—",
       os: latest.os_type || latest.remote_os || "—",
       sessions: sessions.filter((x) => !termIds.has(x.session_id)).length, trust, state, owner: u,
-      promptsBlocked, jit, jitCount: jit.length, jitActive,
+      promptsBlocked, jit, jitAll, jitCount: jit.length, jitActive,
       quarantine: qRec ? { osUser: qRec.osUser, policyId: qRec.policyId, policyName: qRec.policyName, resolution: qRec.resolution, message: qRec.message, status: qRec.status, since: qRec.since } : null,
       svid: stableSpiffe || ("agent-hash:" + (latest.session_id || "").slice(0, 8) + " (fallback)"),
       svidFallback: !stableSpiffe,
@@ -320,8 +330,9 @@ function deriveAll(s) {
   const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
   const newQuarantinesToday = (s.quarantine.quarantined || []).filter((q) => q.since && new Date(q.since) >= startToday).length;
   const promptsBlockedTotal = (s.decisions || []).filter((d) => isBlockedDecision(d) && decisionAgentOf(d, sessById) === "claude-code").length;
-  const jitTotal = svids.length;
   const jitActiveTotal = svids.filter((sv) => sv.status === "active" && new Date(sv.expires_at).getTime() > Date.now()).length;
+  // JIT tile reflects LIVE credentials only — expired/revoked drop off the tile.
+  const jitTotal = jitActiveTotal;
   const kpis = {
     coverage: { governed, total: COVERAGE_TOTAL, ungoverned: Math.max(0, COVERAGE_TOTAL - governed) },
     agents: roster.length,
@@ -1463,7 +1474,7 @@ function AgentDetail({ row, embedded }) {
     const osUser = osUserOfRow();
     if (!osUser) return;
     setAppr("sending");
-    fetch("/api/quarantine/request-approval", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ osUser }) })
+    fetch("/api/quarantine/request-approval", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ osUser, codingAgent: row.codingAgent }) })
       .then((r) => r.json())
       .then((d) => {
         if (d.ok) { setAppr("sent"); revaRefetch(); }
@@ -1548,14 +1559,22 @@ function AgentDetail({ row, embedded }) {
           </div>
         )}
 
-        {row.jit && row.jit.length > 0 && (
+        {(() => {
+          // Developer Details shows LIVE (active) JIT. When the identity is
+          // quarantined its credentials were revoked — surface those as
+          // "revoked" so the operator sees the JIT was pulled.
+          const detailJit = row.state === "Quarantined"
+            ? (row.jitAll || []).filter((j) => j.state === "active" || j.state === "revoked")
+            : (row.jit || []);
+          if (!detailJit.length) return null;
+          return (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "var(--blue-700)", textTransform: "uppercase", letterSpacing: "0.4px", marginTop: 8 }}>JIT — Short-Lived Credentials</div>
-            {row.jit.map((j) => (
+            {detailJit.map((j) => (
               <div key={j.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "11px 13px", background: "var(--surface-2)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span className="mono" style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)" }}>{j.action || "privileged op"}</span>
-                  <span className={"pill pill-" + (j.state === "active" ? "green" : j.state === "revoked" ? "red" : "amber")} style={{ marginLeft: "auto" }}><span className="dot" />{j.state}</span>
+                  <span className={"pill pill-" + (j.state === "active" ? "green" : j.state === "revoked" ? "red" : "amber")} style={{ marginLeft: "auto" }}><span className="dot" />{j.state === "revoked" ? "JIT revoked" : j.state === "expired" ? "JIT expired" : j.state}</span>
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
                   <span className="help">approved by: <span className="mono" style={{ color: "var(--ink-2)" }}>{j.approver || "—"}</span></span>
@@ -1566,7 +1585,8 @@ function AgentDetail({ row, embedded }) {
               </div>
             ))}
           </div>
-        )}
+          );
+        })()}
 
         {(() => {
           const surf = row.surfaceInsights || [];
@@ -1648,17 +1668,25 @@ function SessionsPanel({ row, terminated, embedded }) {
         {sessions.length === 0 && <div className="help" style={{ textAlign: "center", padding: 20 }}>No active sessions.</div>}
         {sessions.map((sx) => {
           const isTerm = termSet.has(sx.session_id);
+          const isQ = !isTerm && row.state === "Quarantined";   // quarantine is per (developer × agent) = whole row
           const conn = sx.entrypoint === "remote" ? "Browser" : (sx.connection_type === "ssh" ? "SSH" : "Local");
           const os = sx.os_type || sx.remote_os || "";
+          // JIT credentials earned by THIS session (incl. expired/revoked).
+          const sessJit = (row.jitAll || []).filter((j) => j.sessionId && j.sessionId === sx.session_id);
+          const cardBg = isQ ? "var(--red-tint)" : "var(--surface-2)";
+          const cardBorder = isQ ? "#F5C2C2" : "var(--border)";
           return (
-            <div key={sx.session_id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface-2)", opacity: isTerm ? 0.62 : 1 }}>
+            <div key={sx.session_id} style={{ border: "1px solid " + cardBorder, borderRadius: 10, padding: "12px 14px", background: cardBg, opacity: isTerm ? 0.62 : 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span className="mono" style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)" }}>{String(sx.session_id || "").slice(0, 14)}</span>
                 {isTerm
                   ? <span className="pill pill-red" style={{ marginLeft: 4 }}><span className="dot" />Terminated</span>
+                  : isQ
+                  ? <span className="pill pill-red" style={{ marginLeft: 4 }}><span className="dot" />Quarantined</span>
                   : <span className="pill pill-green" style={{ marginLeft: 4 }}><span className="dot" />Active</span>}
                 <span className="help" style={{ marginLeft: "auto" }}>{relTimeP(sx.enrolled_at)}</span>
               </div>
+              {isQ && <div style={{ fontSize: 12, color: "#B42318", marginTop: 6 }}>Access quarantined — {(row.quarantine && row.quarantine.policyName) || "isolation policy"}. Operations are blocked until access is restored.</div>}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 9 }}>
                 {sx.entrypoint ? <span className="help">surface: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.entrypoint}</span></span> : null}
                 <span className="help">connection: <span className="mono" style={{ color: "var(--ink-2)" }}>{conn}</span></span>
@@ -1671,6 +1699,30 @@ function SessionsPanel({ row, terminated, embedded }) {
                 {conn === "SSH" && sx.ssh_client_ip ? <span className="help">ssh ip: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.ssh_client_ip}</span></span> : null}
                 {sx.jira_ticket_id ? <span className="help">jira: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.jira_ticket_id}</span></span> : null}
               </div>
+
+              {/* Workload identity for this session */}
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--border)" }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.4px" }}>SPIFFE / SVID</div>
+                <div className="mono" style={{ fontSize: 11.5, color: "var(--ink-2)", marginTop: 3, wordBreak: "break-all" }}>{sx.spiffe_id || row.svid}</div>
+              </div>
+
+              {/* JIT credentials issued within this session */}
+              {sessJit.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: 6 }}>JIT issued in this session</div>
+                  {sessJit.map((j) => {
+                    const label = j.state === "revoked" ? "JIT revoked" : j.state === "expired" ? "JIT expired" : "JIT active";
+                    const tone = j.state === "active" ? "green" : j.state === "revoked" ? "red" : "amber";
+                    return (
+                      <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", marginBottom: 6 }}>
+                        <span className="mono" style={{ fontSize: 11.5, fontWeight: 700, color: "var(--ink)" }}>{j.action || "privileged op"}</span>
+                        <span className={"pill pill-" + tone} style={{ marginLeft: "auto" }}><span className="dot" />{label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {isTerm
                 ? <button className="btn btn-sm" disabled style={{ marginTop: 11, width: "100%", background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)", cursor: "default" }}>Terminated</button>
                 : <button className="btn btn-sm" style={{ marginTop: 11, width: "100%", background: "#fff", color: "var(--red)", border: "1px solid #F5C2C2" }} onClick={() => revaTerminateSession(sx.session_id, true)}>Terminate session</button>}

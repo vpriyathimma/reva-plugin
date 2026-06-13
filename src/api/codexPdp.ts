@@ -37,6 +37,8 @@ import { classifyPrompt, recordBlock, getPersistentTrust, checkIntentDrift } fro
 import { resolveSession } from './sessionResolver';
 import { isEnabled } from './securityConfig';
 import { mapCodexToolToAction, extractCodexTarget, isBashAction, CODING_AGENT } from '../connector/codex/adapter';
+import { isQuarantined } from './quarantine';
+import { isSessionTerminated } from './sessionControl';
 
 const router = Router();
 
@@ -222,6 +224,29 @@ router.post('/codex/evaluate', async (req, res) => {
     const eventName  = b.hook_event_name || 'PermissionRequest';
     const agentType  = b.agent_id ? 'subagent' : 'main';
     const ts = new Date().toISOString();
+
+    // ── Terminate / Quarantine — scoped to this session (terminate) and to the
+    // Codex coding agent (quarantine). A Claude Code quarantine never lands here. ──
+    const denyCodex = (reason: string) => {
+      logDecision({
+        timestamp: ts, session_id, user_email, tool: toolName || 'tool',
+        server: CODING_AGENT, sensitivity: 'high', effect: 'Deny', reason, agent_type: agentType,
+      });
+      if (eventName === 'PreToolUse') {
+        return res.json({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
+      }
+      return res.json({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', reason } } });
+    };
+    if (isSessionTerminated(session_id)) {
+      return denyCodex('This session has been terminated by an administrator. Please exit and start a new session to continue.');
+    }
+    if (isEnabled('quarantine_access')) {
+      const qRec = isQuarantined(user_email, CODING_AGENT);
+      if (qRec) {
+        console.log(`[CODEX:quarantine] tool blocked: ${user_email} via ${qRec.policyId}`);
+        return denyCodex(qRec.message);
+      }
+    }
 
     const tgt    = extractCodexTarget(toolName, toolInput);
     let   action = mapCodexToolToAction(toolName);

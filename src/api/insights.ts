@@ -185,11 +185,13 @@ function buildRoster() {
     byUser.get(u)!.push(sess);
   });
 
-  const quarantineFor = (u: string, sess: EnrolledSession): QuarantineRecord | null => {
+  const quarantineFor = (u: string, sess: EnrolledSession, codingAgent: string): QuarantineRecord | null => {
     const cands = new Set([u, sess.user_email, sess.oauth_email,
       (sess.user_email || '').split('@')[0], (sess.oauth_email || '').split('@')[0]]
       .filter(Boolean).map((x) => String(x).toLowerCase()));
+    const agent = codingAgent || 'claude-code';
     return quarantines.find((q) => {
+      if ((q.codingAgent || 'claude-code') !== agent) return false;   // quarantine is per coding agent
       const qu = String(q.osUser || '').toLowerCase();
       return cands.has(qu) || cands.has(qu.split('@')[0]);
     }) || null;
@@ -215,7 +217,7 @@ function buildRoster() {
       const trustKeys = [latest.user_email, u, firstNonEmpty('oauth_email')].filter(Boolean) as string[];
       let trust = TRUST_BASELINE;
       for (const k of trustKeys) trust = Math.min(trust, getPersistentTrust(k));
-      const qRec = quarantineFor(u, latest);
+      const qRec = quarantineFor(u, latest, codingAgent);
       const isQ = !!qRec;
 
       // identity-level decisions for this user, attributed by session_id: each
@@ -253,10 +255,17 @@ function buildRoster() {
         .map((k) => ({ label: k, count: reasonMap[k], pct: reasonTotal ? Math.round((reasonMap[k] / reasonTotal) * 100) : 0 }))
         .sort((a, b) => b.pct - a.pct);
 
-      // JIT creds issued to this developer (matched by email)
+      // JIT creds for this (developer × coding agent). Only ACTIVE, non-expired
+      // credentials surface on the roster/tile — expired/revoked drop off (the
+      // per-session view still renders their final state).
       const email = (firstNonEmpty('oauth_email') || firstNonEmpty('user_email') || u) as string;
-      const myJit = svids.filter((s) => sameEmail(s.developer_email, email) || sameEmail(s.developer_email, u));
-      const jitActive = myJit.filter((s) => s.status === 'active').length;
+      const nowMs = Date.now();
+      const myJit = svids.filter((s) =>
+        (s.coding_agent || 'claude-code') === codingAgent &&
+        (sameEmail(s.developer_email, email) || sameEmail(s.developer_email, u) ||
+         (s.os_user ? sameEmail(s.os_user, u) : false)) &&
+        s.status === 'active' && new Date(s.expires_at).getTime() > nowMs);
+      const jitActive = myJit.length;
 
       roster.push({
         id: principalOf(u) + '#' + codingAgent,

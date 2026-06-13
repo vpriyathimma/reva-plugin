@@ -210,7 +210,8 @@ app.post('/api/pdp/hook', async (req, res) => {
       // result or ingested file quarantines the developer too.
       try {
         if (require('./api/securityConfig').isEnabled('quarantine_access')) {
-          require('./api/quarantine').clip({ osUser: user_email, policyId: 'AAI-UAP-001', reason: `${detection} detected in ${fp}` });
+          const ca = require('./connector/discovery/enroll').sessionStore.get(session_id)?.coding_agent || 'claude-code';
+          require('./api/quarantine').clip({ osUser: user_email, codingAgent: ca, policyId: 'AAI-UAP-001', reason: `${detection} detected in ${fp}` });
         }
       } catch (e) { /* never break the scan */ }
 

@@ -270,13 +270,14 @@ export async function handleToolCall(req: Request, res: Response) {
     const enrolledSession   = sessionStore.get(session_id);
     const user_email = osUserFromHeader || osUserFromSession || enrolledSession?.user_email || user_email_body || 'claude-code-hook@reva.ai';
 
-    // ── Terminate Session — checked first, blocks everything ──
-    const pipCtxTerm = getPIPContext(user_email);
-    const termHostname = hostnameStore.get(user_email) || req.body?.hostname || enrolledSession?.hostname || 'unknown';
-    const termEmail = pipCtxTerm?.oauth_email || user_email;
-    const terminateKey = `${termEmail}::${termHostname}`;
-    if (isSessionTerminated(terminateKey)) {
-      console.log(`[SESSION] Blocked: ${terminateKey} — session terminated by administrator`);
+    // Coding agent for this session (claude-code default). Quarantine + JIT are
+    // scoped per agent so a clip here never affects the developer's Codex/Kiro.
+    const codingAgent = enrolledSession?.coding_agent || 'claude-code';
+
+    // ── Terminate Session — checked first, blocks everything. Session-scoped
+    // (keyed by session_id), so only this session is killed. ──
+    if (isSessionTerminated(session_id)) {
+      console.log(`[SESSION] Blocked: ${session_id} — session terminated by administrator`);
       return res.json({
         // continue:false halts the session with a clean user-facing message (no hook wrapper)
         continue: false,
@@ -292,9 +293,9 @@ export async function handleToolCall(req: Request, res: Response) {
     // access is quarantined. When ON, any active quarantine blocks tool calls,
     // and a High Denial Rate over the current session clips the developer.
     if (isEnabled('quarantine_access')) {
-      const qRec = isQuarantined(user_email);
+      const qRec = isQuarantined(user_email, codingAgent);
       if (qRec) {
-        console.log(`[QUARANTINE] tool blocked: ${user_email} via ${qRec.policyId}`);
+        console.log(`[QUARANTINE] tool blocked: ${user_email} (${codingAgent}) via ${qRec.policyId}`);
         logDecision({
           timestamp: new Date().toISOString(), session_id, user_email,
           tool: tool_name, server: server_name || 'claude-code', sensitivity: 'high',
@@ -315,7 +316,7 @@ export async function handleToolCall(req: Request, res: Response) {
       const denies   = sessDecs.filter(d => d.effect === 'Deny').length;
       if (totalDec >= DENY_RATE_MIN_DECISIONS && (denies / totalDec) > DENY_RATE_THRESHOLD) {
         const pct = Math.round((denies / totalDec) * 100);
-        quarantineClip({ osUser: user_email, policyId: 'AAI-RBP-002', reason: `${denies}/${totalDec} denials this session (${pct}%)` });
+        quarantineClip({ osUser: user_email, codingAgent, policyId: 'AAI-RBP-002', reason: `${denies}/${totalDec} denials this session (${pct}%)` });
         console.log(`[QUARANTINE] deny-rate: ${user_email} ${denies}/${totalDec} (${pct}%) session=${session_id}`);
         logDecision({
           timestamp: new Date().toISOString(), session_id, user_email,
@@ -378,6 +379,7 @@ export async function handleToolCall(req: Request, res: Response) {
         if (spawn.overLimit) {
           quarantineClip({
             osUser:   user_email,
+            codingAgent,
             policyId: 'AAI-RBP-003',
             reason:   `Started more than ${SPAWN_LIMIT} parallel agents in session ${session_id}`,
           });
@@ -667,6 +669,9 @@ export async function handleToolCall(req: Request, res: Response) {
               branch:          pipCtx?.github?.github_branch || '',
               ticket:          pipCtx?.jira?.jira_ticket_id || '',
               spiffe_id:       spiffeId,
+              session_id,
+              coding_agent:    codingAgent,
+              os_user:         user_email,
             });
           }
 

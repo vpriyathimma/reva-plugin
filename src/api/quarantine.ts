@@ -60,6 +60,7 @@ export type QuarantineStatus = 'Quarantined' | 'Awaiting resolution' | 'Auto-res
 
 export interface QuarantineRecord {
   osUser:     string;
+  codingAgent: string;       // claude-code | codex | kiro — quarantine is scoped per agent
   policyId:   string;
   policyName: string;
   reason:     string;        // contextual detail for the console (not shown to the developer)
@@ -72,8 +73,13 @@ export interface QuarantineRecord {
   status:     QuarantineStatus;
 }
 
-// Developer-scoped quarantine state.
+// Quarantine state, scoped per (developer × coding agent). A clip from Claude Code
+// quarantines ONLY the developer's Claude Code access — Codex and Kiro stay live.
 const quarantineStore = new Map<string, QuarantineRecord>();
+
+function qKey(osUser: string, codingAgent?: string): string {
+  return `${osUser}::${codingAgent || 'claude-code'}`;
+}
 
 // Per-session spawn cap state (surge). Once a session hits the cap it stays
 // capped for its whole life; a brand-new session starts clean.
@@ -103,13 +109,14 @@ export function isSessionCapped(sessionId: string): boolean {
 }
 
 // ── Quarantine core ──
-export function isQuarantined(osUser: string): QuarantineRecord | null {
+export function isQuarantined(osUser: string, codingAgent?: string): QuarantineRecord | null {
   if (!osUser) return null;
-  const rec = quarantineStore.get(osUser);
+  const key = qKey(osUser, codingAgent);
+  const rec = quarantineStore.get(key);
   if (!rec) return null;
   // Auto-Restore expiry check (lazy, in addition to the timer below)
   if (rec.expiresAt && Date.now() >= rec.expiresAt) {
-    quarantineStore.delete(osUser);
+    quarantineStore.delete(key);
     emitReva({ type: 'quarantine' });
     return null;
   }
@@ -117,17 +124,20 @@ export function isQuarantined(osUser: string): QuarantineRecord | null {
 }
 
 export function clip(params: {
-  osUser: string; policyId: string; reason: string; status?: QuarantineStatus;
+  osUser: string; codingAgent?: string; policyId: string; reason: string; status?: QuarantineStatus;
 }): QuarantineRecord | null {
   const def = POLICY_DEFS[params.policyId];
   if (!def || !params.osUser) return null;
+  const codingAgent = params.codingAgent || 'claude-code';
+  const key = qKey(params.osUser, codingAgent);
   // Do not downgrade an existing prompt-tier (revoke) quarantine to a tool-call one.
-  const existing = quarantineStore.get(params.osUser);
+  const existing = quarantineStore.get(key);
   if (existing && existing.tier === 'prompt' && def.tier === 'toolcall') return existing;
 
   const now = Date.now();
   const rec: QuarantineRecord = {
     osUser:     params.osUser,
+    codingAgent,
     policyId:   def.id,
     policyName: def.name,
     reason:     params.reason,
@@ -139,16 +149,27 @@ export function clip(params: {
     expiresAt:  def.ttlSec ? now + def.ttlSec * 1000 : undefined,
     status:     params.status || (def.resolution === 'Auto-Restore' ? 'Auto-restoring' : 'Quarantined'),
   };
-  quarantineStore.set(params.osUser, rec);
-  console.log(`[QUARANTINE] clip ${params.osUser} via ${def.id} (${def.name}) tier=${def.tier} resolution=${def.resolution}`);
+  quarantineStore.set(key, rec);
+  console.log(`[QUARANTINE] clip ${params.osUser} (${codingAgent}) via ${def.id} (${def.name}) tier=${def.tier} resolution=${def.resolution}`);
+
+  // A quarantined session can't act — so its short-lived (JIT) credentials are
+  // revoked immediately. Scoped to this coding agent only. Lazy require avoids a
+  // load-order cycle and never throws into the clip path.
+  try {
+    const { revokeSVIDsForAgent } = require('./svid');
+    const n = revokeSVIDsForAgent([params.osUser, params.osUser.split('@')[0]], codingAgent);
+    if (n) console.log(`[QUARANTINE] revoked ${n} JIT credential(s) for ${params.osUser} (${codingAgent})`);
+  } catch (e: any) { console.warn(`[QUARANTINE] JIT revoke skipped: ${e?.message}`); }
+
   emitReva({ type: 'quarantine' });
   return rec;
 }
 
-export function reinstate(osUser: string): boolean {
-  const had = quarantineStore.delete(osUser);
+export function reinstate(osUser: string, codingAgent?: string): boolean {
+  const key = qKey(osUser, codingAgent);
+  const had = quarantineStore.delete(key);
   if (had) {
-    console.log(`[QUARANTINE] reinstate ${osUser}`);
+    console.log(`[QUARANTINE] reinstate ${osUser} (${codingAgent || 'claude-code'})`);
     emitReva({ type: 'quarantine' });
   }
   return had;
@@ -190,18 +211,18 @@ quarantineRouter.get('/quarantine', (_req: Request, res: Response) => {
 
 // Manual clip (e.g. Incident Blast Radius from the AAI board "Review"/clip action)
 quarantineRouter.post('/quarantine/clip', (req: Request, res: Response) => {
-  const { osUser, policyId, reason } = req.body || {};
+  const { osUser, codingAgent, policyId, reason } = req.body || {};
   if (!osUser || !policyId) return res.status(400).json({ ok: false, error: 'osUser and policyId required' });
-  const rec = clip({ osUser, policyId, reason: reason || 'Manually clipped from console' });
+  const rec = clip({ osUser, codingAgent, policyId, reason: reason || 'Manually clipped from console' });
   if (!rec) return res.status(400).json({ ok: false, error: 'Unknown policyId' });
   res.json({ ok: true, record: rec });
 });
 
 // Reinstate — Manual Admin Grant (direct) or after HITL approval.
 quarantineRouter.post('/quarantine/reinstate', (req: Request, res: Response) => {
-  const { osUser } = req.body || {};
+  const { osUser, codingAgent } = req.body || {};
   if (!osUser) return res.status(400).json({ ok: false, error: 'osUser required' });
-  const ok = reinstate(osUser);
+  const ok = reinstate(osUser, codingAgent);
   res.json({ ok, reinstated: ok ? osUser : null });
 });
 
@@ -209,9 +230,10 @@ quarantineRouter.post('/quarantine/reinstate', (req: Request, res: Response) => 
 // configured Slack channel; if Slack isn't configured we report that so the UI
 // can prompt the admin to configure it (we do NOT silently fake an approval).
 quarantineRouter.post('/quarantine/request-approval', async (req: Request, res: Response) => {
-  const { osUser } = req.body || {};
+  const { osUser, codingAgent } = req.body || {};
   if (!osUser) return res.status(400).json({ ok: false, error: 'osUser required' });
-  const rec = quarantineStore.get(osUser);
+  const agent = codingAgent || 'claude-code';
+  const rec = quarantineStore.get(qKey(osUser, agent));
   if (!rec) return res.status(404).json({ ok: false, error: 'not quarantined' });
 
   const hitl = require('./hitlConfig').getHITLConfig();
@@ -225,7 +247,7 @@ quarantineRouter.post('/quarantine/request-approval', async (req: Request, res: 
   try { approver = require('./approverConfig').getApproverFor(osUser); } catch {}
   const send = require('./hitlConfig').sendQuarantineApprovalMessage;
   const result = await send(hitl.slack_bot_token, hitl.slack_channel_id || hitl.slack_channel, {
-    principal: `user:${osUser}`, policyName: rec.policyName, approver, detail: rec.reason,
+    principal: `user:${osUser}`, codingAgent: agent, policyName: rec.policyName, approver, detail: rec.reason,
   });
   if (!result.ok) {
     console.warn(`[QUARANTINE] approval send failed for ${osUser}: ${result.error}`);

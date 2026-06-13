@@ -39,6 +39,8 @@ import { classifyPrompt, recordBlock, getPersistentTrust, checkIntentDrift } fro
 import { resolveSession } from './sessionResolver';
 import { isEnabled } from './securityConfig';
 import { mapKiroToolToAction, extractKiroTarget, isBashAction, CODING_AGENT } from '../connector/kiro/adapter';
+import { isQuarantined } from './quarantine';
+import { isSessionTerminated } from './sessionControl';
 
 const router = Router();
 
@@ -230,6 +232,26 @@ router.post('/kiro/evaluate', async (req, res) => {
     const toolInput  = b.tool_input || {};
     const agentType  = b.agent_id ? 'subagent' : 'main';
     const ts = new Date().toISOString();
+
+    // ── Terminate / Quarantine — session-scoped (terminate) and Kiro-agent-scoped
+    // (quarantine). A Claude Code or Codex quarantine never lands here. ──
+    const denyKiro = (reason: string) => {
+      logDecision({
+        timestamp: ts, session_id, user_email, tool: toolName || 'tool',
+        server: CODING_AGENT, sensitivity: 'high', effect: 'Deny', reason, agent_type: agentType,
+      });
+      return res.json({ decision: 'deny', reason });
+    };
+    if (isSessionTerminated(session_id)) {
+      return denyKiro('This session has been terminated by an administrator. Please exit and start a new session to continue.');
+    }
+    if (isEnabled('quarantine_access')) {
+      const qRec = isQuarantined(user_email, CODING_AGENT);
+      if (qRec) {
+        console.log(`[KIRO:quarantine] tool blocked: ${user_email} via ${qRec.policyId}`);
+        return denyKiro(qRec.message);
+      }
+    }
 
     const tgt    = extractKiroTarget(toolName, toolInput);
     let   action = mapKiroToolToAction(toolName);

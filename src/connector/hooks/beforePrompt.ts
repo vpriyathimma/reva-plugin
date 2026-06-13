@@ -80,7 +80,8 @@ export async function handlePromptSubmit(req: Request, res: Response) {
     // ── Prompt-tier quarantine — only when quarantine_access is enabled (master
     // switch). Blocks ALL prompts (even in a fresh session) until the window
     // lifts (surge) or an admin restores access (revoke). Neutral message.
-    const qRec = isEnabled('quarantine_access') ? isQuarantined(user_email) : null;
+    const codingAgentBP = sessionStore.get(session_id)?.coding_agent || 'claude-code';
+    const qRec = isEnabled('quarantine_access') ? isQuarantined(user_email, codingAgentBP) : null;
     if (qRec && qRec.tier === 'prompt') {
       console.log(`[QUARANTINE] prompt blocked: ${user_email} via ${qRec.policyId}`);
       logDecision({
