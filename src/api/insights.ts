@@ -923,9 +923,14 @@ insightsRouter.get('/intent-profile', (req, res) => {
   const traceId = req.query.traceId ? String(req.query.traceId) : '';
   const session = req.query.session ? String(req.query.session) : '';
 
+  // Match the traceId ignoring hyphens (and any non-alphanumerics) so the UUID
+  // works with or without dashes: 5f3acaf1-0350-… === 5f3acaf10350…
+  const normTrace = (s: string) => String(s || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const wantTrace = normTrace(traceId);
+
   let decisions: DecisionLog[];
   if (traceId) {
-    decisions = decisionLog.filter((d) => traceIdOf(d) === traceId);
+    decisions = decisionLog.filter((d) => normTrace(traceIdOf(d)) === wantTrace);
   } else if (session) {
     decisions = decisionLog.filter((d) => d.session_id === session);
   } else {
@@ -934,7 +939,8 @@ insightsRouter.get('/intent-profile', (req, res) => {
 
   if (!decisions.length) return res.status(404).json({ error: 'no decisions for trace', traceId, session });
 
-  const resolvedTrace = traceId || traceIdOf(decisions[0]);
+  // Return the canonical trace id (as stored), regardless of the input form.
+  const resolvedTrace = (traceId ? traceIdOf(decisions[0]) : traceIdOf(decisions[0]));
   // one intent profile per decision in the trace; each carries traceId + timestamp
   const profiles = decisions.map((d) => ({ ...ipCompute(d), traceId: traceIdOf(d) }));
   res.json({ traceId: resolvedTrace, count: profiles.length, profiles });
