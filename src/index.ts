@@ -211,7 +211,7 @@ app.post('/api/pdp/hook', async (req, res) => {
       try {
         if (require('./api/securityConfig').isEnabled('quarantine_access')) {
           const ca = require('./connector/discovery/enroll').sessionStore.get(session_id)?.coding_agent || 'claude-code';
-          require('./api/quarantine').clip({ osUser: user_email, codingAgent: ca, policyId: 'AAI-UAP-001', reason: `${detection} detected in ${fp}` });
+          require('./api/quarantine').clip({ osUser: user_email, codingAgent: ca, sessionId: session_id, policyId: 'AAI-UAP-001', reason: `${detection} detected in ${fp}` });
         }
       } catch (e) { /* never break the scan */ }
 

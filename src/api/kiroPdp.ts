@@ -246,7 +246,7 @@ router.post('/kiro/evaluate', async (req, res) => {
       return denyKiro('This session has been terminated by an administrator. Please exit and start a new session to continue.');
     }
     if (isEnabled('quarantine_access')) {
-      const qRec = isQuarantined(user_email, CODING_AGENT);
+      const qRec = isQuarantined(user_email, CODING_AGENT, session_id);
       if (qRec) {
         console.log(`[KIRO:quarantine] tool blocked: ${user_email} via ${qRec.policyId}`);
         return denyKiro(qRec.message);

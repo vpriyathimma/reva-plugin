@@ -40,6 +40,8 @@ import { listQuarantines, QuarantineRecord } from './quarantine';
 import { getPersistentTrust, TRUST_BASELINE } from './intentClassifier';
 import { listAllSVIDs } from './svid';
 import { getSelectedApprover, getKnownApprovers } from './approverConfig';
+import { enrichSessions } from './inventory';
+import { isSessionTerminated } from './sessionControl';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -486,6 +488,25 @@ function rowByEmail(roster: RosterRow[], authenticatedAs: string): RosterRow | u
   return roster.find((r) => sameEmail(r.email, e));
 }
 
+// All rows for an authenticatedAs (one per coding agent the developer uses).
+function rowsByEmail(roster: RosterRow[], authenticatedAs: string): RosterRow[] {
+  const e = decodeURIComponent(authenticatedAs || '');
+  return roster.filter((r) => sameEmail(r.email, e));
+}
+
+// A single identity = (authenticatedAs × coding agent). codingAgent disambiguates
+// when the same email is used under Claude Code, Codex and Kiro.
+function rowByEmailAndAgent(roster: RosterRow[], authenticatedAs: string, codingAgent?: string): RowMatch {
+  const rows = rowsByEmail(roster, authenticatedAs);
+  if (!rows.length) return { row: undefined, rows, ambiguous: false };
+  if (codingAgent) {
+    const ca = String(codingAgent).toLowerCase();
+    return { row: rows.find((r) => (r.codingAgent || 'claude-code').toLowerCase() === ca), rows, ambiguous: false };
+  }
+  return { row: rows[0], rows, ambiguous: rows.length > 1 };
+}
+type RowMatch = { row: RosterRow | undefined; rows: RosterRow[]; ambiguous: boolean };
+
 // jit is addressed by spiffeId — match the identity's SPIFFE, falling back to a
 // credential's spiffe_id if the caller passes a per-credential SVID id.
 function rowBySpiffe(roster: RosterRow[], spiffeId: string): RosterRow | undefined {
@@ -527,13 +548,17 @@ function detailIdentity(row: RosterRow) {
 }
 
 function detailSessions(row: RosterRow) {
-  const out = row.sessionIds.map((sid) => {
-    const sx = sessionStore.get(sid);
-    if (!sx) return null;
-    const connection = sx.entrypoint === 'remote' ? 'Browser' : (sx.connection_type === 'ssh' ? 'SSH' : 'Local');
+  // Pull the row's raw sessions and enrich them with SVID + JIT + quarantine,
+  // the same shape /api/sessions returns. The row IS the (developer × coding
+  // agent) group, so legacy-credential attribution resolves correctly.
+  const raw = row.sessionIds.map((id) => sessionStore.get(id)).filter(Boolean) as EnrolledSession[];
+  const enriched = enrichSessions(raw);
+  const out = enriched.map((sx: any) => {
+    const isTerm = isSessionTerminated(sx.session_id);
+    const connection = sx.connection_type === 'ssh' ? 'SSH' : (sx.entrypoint === 'remote' ? 'Browser' : 'Local');
     return {
       session_id: sx.session_id,
-      status: 'active',                     // terminated state is tracked in sessionControl; see /api/session/terminated
+      status: isTerm ? 'terminated' : (sx.quarantined ? 'quarantined' : 'active'),
       enrolledAt: sx.enrolled_at,
       enrolledRel: relTime(sx.enrolled_at),
       surface: sx.entrypoint || sx.surface || '',
@@ -548,9 +573,23 @@ function detailSessions(row: RosterRow) {
       jira: sx.jira_ticket_id || '',
       toolCount: sx.tool_count || 0,
       mcpServers: sx.mcp_servers_discovered || [],
+      // ── workload identity + JIT for this session ──
+      svid: sx.svid || row.svid,
+      jit: sx.jit,                       // [{ id, action, state: active|expired|revoked, approver, project, ... }]
+      jitActive: sx.jit_active,
+      // ── quarantine (session-scoped) ──
+      quarantined: sx.quarantined,
+      quarantinePolicy: sx.quarantine_policy,
+      quarantineMessage: sx.quarantine_message,
     };
-  }).filter(Boolean);
-  return { section: 'Developer Details · Sessions', count: out.length, sessions: out };
+  });
+  return {
+    section: 'Developer Details · Sessions',
+    authenticatedAs: row.email,
+    codingAgent: row.codingAgent,
+    count: out.length,
+    sessions: out,
+  };
 }
 
 function detailJit(row: RosterRow) {
@@ -782,19 +821,72 @@ insightsRouter.get('/insights/summary', (req, res) => {
 });
 
 // ---- Developer detail ----
-//   GET /api/identities/:authenticatedAs/identity
-//   GET /api/identities/:authenticatedAs/sessions
+//   GET /api/identities/:authenticatedAs                      → ALL coding-agent identities for this email (complete)
+//   GET /api/identities/:authenticatedAs/identity?coding_agent=claude-code|codex|kiro
+//   GET /api/identities/:authenticatedAs/sessions?coding_agent=…   (SVID + JIT + quarantine per session)
 //   GET /api/identities/jit?spiffeId=<spiffe id>
+//
+// `authenticatedAs` (the login email) is shared across coding agents, so the
+// `coding_agent` query param selects ONE identity. Omit it on /identity to get
+// every agent the developer uses. The /:authenticatedAs root always returns the
+// full set with each identity's sessions, SVID, JIT and quarantine inlined.
 insightsRouter.get('/identities/:authenticatedAs/identity', (req, res) => {
-  const row = rowByEmail(buildRoster(), req.params.authenticatedAs);
-  if (!row) return res.status(404).json({ error: 'identity not found', authenticatedAs: req.params.authenticatedAs });
-  res.json(detailIdentity(row));
+  const codingAgent = req.query.coding_agent ? String(req.query.coding_agent) : '';
+  const m = rowByEmailAndAgent(buildRoster(), req.params.authenticatedAs, codingAgent);
+  if (!m.rows.length) return res.status(404).json({ error: 'identity not found', authenticatedAs: req.params.authenticatedAs });
+  // No coding_agent given and the developer uses more than one → return all of
+  // them rather than silently picking one (the old behavior).
+  if (!codingAgent && m.ambiguous) {
+    return res.json({
+      authenticatedAs: m.rows[0].email,
+      codingAgents: m.rows.map((r) => r.codingAgent),
+      count: m.rows.length,
+      note: 'Multiple coding agents under this email. Pass ?coding_agent= to select one.',
+      identities: m.rows.map(detailIdentity),
+    });
+  }
+  if (!m.row) return res.status(404).json({ error: 'identity not found for coding agent', authenticatedAs: req.params.authenticatedAs, coding_agent: codingAgent, available: m.rows.map((r) => r.codingAgent) });
+  res.json(detailIdentity(m.row));
+});
+
+// All coding-agent identities for a login email, each fully detailed
+// (identity + sessions[with SVID/JIT/quarantine] + JIT ledger).
+insightsRouter.get('/identities/:authenticatedAs', (req, res, next) => {
+  // `jit` is a reserved sibling route (/identities/jit) — let it through.
+  if (req.params.authenticatedAs === 'jit') return next();
+  const rows = rowsByEmail(buildRoster(), req.params.authenticatedAs);
+  if (!rows.length) return res.status(404).json({ error: 'identity not found', authenticatedAs: req.params.authenticatedAs });
+  res.json({
+    authenticatedAs: rows[0].email,
+    owner: rows[0].owner,
+    codingAgents: rows.map((r) => r.codingAgent),
+    count: rows.length,
+    identities: rows.map((r) => ({
+      ...detailIdentity(r),
+      sessions: detailSessions(r).sessions,
+      jit: detailJit(r).records,
+    })),
+  });
 });
 
 insightsRouter.get('/identities/:authenticatedAs/sessions', (req, res) => {
-  const row = rowByEmail(buildRoster(), req.params.authenticatedAs);
-  if (!row) return res.status(404).json({ error: 'identity not found', authenticatedAs: req.params.authenticatedAs });
-  res.json(detailSessions(row));
+  const codingAgent = req.query.coding_agent ? String(req.query.coding_agent) : '';
+  const m = rowByEmailAndAgent(buildRoster(), req.params.authenticatedAs, codingAgent);
+  if (!m.rows.length) return res.status(404).json({ error: 'identity not found', authenticatedAs: req.params.authenticatedAs });
+  // coding_agent selected → that identity's sessions; otherwise every agent's,
+  // each tagged with its codingAgent so the caller can split them.
+  if (codingAgent) {
+    if (!m.row) return res.status(404).json({ error: 'identity not found for coding agent', coding_agent: codingAgent, available: m.rows.map((r) => r.codingAgent) });
+    return res.json(detailSessions(m.row));
+  }
+  const groups = m.rows.map((r) => detailSessions(r));
+  res.json({
+    section: 'Developer Details · Sessions',
+    authenticatedAs: m.rows[0].email,
+    codingAgents: m.rows.map((r) => r.codingAgent),
+    count: groups.reduce((n, g) => n + g.count, 0),
+    sessions: groups.flatMap((g) => g.sessions.map((s: any) => ({ ...s, codingAgent: g.codingAgent }))),
+  });
 });
 
 insightsRouter.get('/identities/jit', (req, res) => {

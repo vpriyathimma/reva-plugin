@@ -293,7 +293,7 @@ export async function handleToolCall(req: Request, res: Response) {
     // access is quarantined. When ON, any active quarantine blocks tool calls,
     // and a High Denial Rate over the current session clips the developer.
     if (isEnabled('quarantine_access')) {
-      const qRec = isQuarantined(user_email, codingAgent);
+      const qRec = isQuarantined(user_email, codingAgent, session_id);
       if (qRec) {
         console.log(`[QUARANTINE] tool blocked: ${user_email} (${codingAgent}) via ${qRec.policyId}`);
         logDecision({
@@ -316,7 +316,7 @@ export async function handleToolCall(req: Request, res: Response) {
       const denies   = sessDecs.filter(d => d.effect === 'Deny').length;
       if (totalDec >= DENY_RATE_MIN_DECISIONS && (denies / totalDec) > DENY_RATE_THRESHOLD) {
         const pct = Math.round((denies / totalDec) * 100);
-        quarantineClip({ osUser: user_email, codingAgent, policyId: 'AAI-RBP-002', reason: `${denies}/${totalDec} denials this session (${pct}%)` });
+        quarantineClip({ osUser: user_email, codingAgent, sessionId: session_id, policyId: 'AAI-RBP-002', reason: `${denies}/${totalDec} denials this session (${pct}%)` });
         console.log(`[QUARANTINE] deny-rate: ${user_email} ${denies}/${totalDec} (${pct}%) session=${session_id}`);
         logDecision({
           timestamp: new Date().toISOString(), session_id, user_email,
@@ -380,6 +380,7 @@ export async function handleToolCall(req: Request, res: Response) {
           quarantineClip({
             osUser:   user_email,
             codingAgent,
+            sessionId: session_id,
             policyId: 'AAI-RBP-003',
             reason:   `Started more than ${SPAWN_LIMIT} parallel agents in session ${session_id}`,
           });

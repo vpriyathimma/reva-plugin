@@ -81,7 +81,7 @@ export async function handlePromptSubmit(req: Request, res: Response) {
     // switch). Blocks ALL prompts (even in a fresh session) until the window
     // lifts (surge) or an admin restores access (revoke). Neutral message.
     const codingAgentBP = sessionStore.get(session_id)?.coding_agent || 'claude-code';
-    const qRec = isEnabled('quarantine_access') ? isQuarantined(user_email, codingAgentBP) : null;
+    const qRec = isEnabled('quarantine_access') ? isQuarantined(user_email, codingAgentBP, session_id) : null;
     if (qRec && qRec.tier === 'prompt') {
       console.log(`[QUARANTINE] prompt blocked: ${user_email} via ${qRec.policyId}`);
       logDecision({
@@ -182,7 +182,7 @@ export async function handlePromptSubmit(req: Request, res: Response) {
       // the master switch is on. This branch only runs while prompt_injection is
       // enabled (scores are zeroed otherwise), so no extra injection gate needed.
       if (isEnabled('quarantine_access')) {
-        quarantineClip({ osUser: user_email, policyId: 'AAI-UAP-001', reason: `${detection} detected in prompt` });
+        quarantineClip({ osUser: user_email, codingAgent: codingAgentBP, sessionId: session_id, policyId: 'AAI-UAP-001', reason: `${detection} detected in prompt` });
       }
       const projectName = (req.body.project_name as string) || 'unknown';
       let cedarResult; let injPayload: any;

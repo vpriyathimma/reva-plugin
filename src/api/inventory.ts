@@ -3,6 +3,8 @@ import { activeMcpServers } from '../connector/hooks/beforeToolCall';
 import { sessionStore, decisionLog } from '../connector/discovery/enroll';
 import { knownServers, resolveServer } from './knownServers';
 import { discoveredServers, dynamicTools, getServerTools } from './mcpProbe';
+import { listAllSVIDs } from './svid';
+import { isQuarantined, isSessionQuarantined } from './quarantine';
 
 const router = Router();
 
@@ -116,9 +118,52 @@ router.get('/decisions', (_req, res) => {
   res.json({ decisions: recent, total: decisionLog.length });
 });
 
-// GET /api/sessions
-router.get('/sessions', (_req, res) => {
-  const sessions = Array.from(sessionStore.values()).map(s => ({
+// Enrich raw sessions with per-session SVID, JIT credentials (with lifecycle
+// state), and session-scoped quarantine. Exported so the identities detail
+// endpoints return the same shape. `all` should contain at least the full
+// (developer × coding agent) group of any session it enriches, so legacy
+// credentials (no session_id) can be attributed to the right session.
+export function enrichSessions(all: any[]): any[] {
+  const nowMs = Date.now();
+  const svids = listAllSVIDs().map((sv: any) => ({
+    id: sv.id, action: sv.action, project: sv.project,
+    approver: sv.issued_by, recipient: sv.developer_email,
+    issued_at: sv.issued_at, expires_at: sv.expires_at,
+    spiffe_id: sv.spiffe_id, has_jwt: !!sv.jwt,
+    session_id: sv.session_id || '', coding_agent: sv.coding_agent || 'claude-code',
+    os_user: sv.os_user || '',
+    state: sv.status === 'active' && new Date(sv.expires_at).getTime() < nowMs ? 'expired' : sv.status,
+  }));
+  const ownerKeys = (s: any) => [s.os_user, s.user_email, s.oauth_email,
+    (s.user_email || '').split('@')[0], (s.oauth_email || '').split('@')[0]]
+    .filter(Boolean).map((x: string) => String(x).toLowerCase());
+  const matchesOwner = (sv: any, s: any) => {
+    const keys = new Set(ownerKeys(s));
+    const owners = [sv.os_user, sv.recipient, (sv.recipient || '').split('@')[0]]
+      .filter(Boolean).map((o: string) => String(o).toLowerCase());
+    return owners.some((o) => keys.has(o) || keys.has(o.split('@')[0]));
+  };
+  const jitFor = (s: any) => {
+    const direct = svids.filter((sv) => sv.session_id && sv.session_id === s.session_id);
+    const legacy = svids.filter((sv) => !sv.session_id
+      && (sv.coding_agent || 'claude-code') === (s.coding_agent || 'claude-code')
+      && matchesOwner(sv, s));
+    if (!legacy.length) return direct;
+    const latest = all
+      .filter((x) => (x.coding_agent || 'claude-code') === (s.coding_agent || 'claude-code'))
+      .filter((x) => { const keys = new Set(ownerKeys(s)); return ownerKeys(x).some((k) => keys.has(k)); })
+      .sort((a, b) => new Date(b.enrolled_at).getTime() - new Date(a.enrolled_at).getTime())[0];
+    const isLatest = latest && latest.session_id === s.session_id;
+    return isLatest ? [...direct, ...legacy] : direct;
+  };
+
+  return all.map((s) => {
+    const ca = s.coding_agent || 'claude-code';
+    let qRec: any = null;
+    for (const cand of ownerKeys(s)) { const r = isSessionQuarantined(s.session_id, cand, ca); if (r) { qRec = r; break; } }
+    if (!qRec) qRec = isSessionQuarantined(s.session_id);
+    const jit = jitFor(s);
+    return {
     active_mcp_servers: [...(activeMcpServers.get(s.session_id) || new Set())],
     session_id:     s.session_id,
     user_email:     s.user_email,
@@ -147,14 +192,29 @@ router.get('/sessions', (_req, res) => {
     ssh_client_ip:     s.ssh_client_ip    || '',
     remote_os:         s.remote_os        || '',
     entrypoint:        s.entrypoint       || '',
-    coding_agent:      s.coding_agent     || 'claude-code',
+    coding_agent:      ca,
     surface:           s.surface          || '',
     kiro_account_type: (s as any).kiro_account_type || '',
     kiro_email:        (s as any).kiro_email        || '',
     kiro_region:       (s as any).kiro_region       || '',
     kiro_start_url:    (s as any).kiro_start_url    || '',
     kiro_profile_arn:  (s as any).kiro_profile_arn  || '',
-  }));
+    // ── Workload identity + credentials for this session ──
+    svid:              s.spiffe_id || '',          // SPIFFE/SVID (workload identity)
+    jit,                                           // session's JIT/SVID credentials (with state)
+    jit_active:        jit.filter((j: any) => j.state === 'active').length,
+    // ── Quarantine state (session-scoped) ──
+    quarantined:       !!qRec,
+    quarantine_scope:  qRec ? (qRec.scope || 'session') : '',
+    quarantine_policy: qRec ? qRec.policyName : '',
+    quarantine_message: qRec ? qRec.message : '',
+  };
+  });
+}
+
+// GET /api/sessions
+router.get('/sessions', (_req, res) => {
+  const sessions = enrichSessions(Array.from(sessionStore.values()));
   res.json({ sessions, total: sessions.length });
 });
 

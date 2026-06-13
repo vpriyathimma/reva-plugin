@@ -179,15 +179,20 @@ function deriveAll(s) {
   const qList = s.quarantine.quarantined || [];
   const cappedSessions = new Set(s.quarantine.capped_sessions || []);
   const termIds = new Set(s.terminated || []);  // terminated session_ids (per-session kill switch)
-  // Match a quarantine record against a developer's identity forms, scoped to a
-  // coding agent. A Claude Code clip never marks the Codex/Kiro rows.
-  const quarantineFor = (u, sess, codingAgent) => {
-    const cands = new Set([u, sess.user_email, sess.oauth_email,
-      (sess.user_email || "").split("@")[0], (sess.oauth_email || "").split("@")[0]]
-      .filter(Boolean).map((x) => String(x).toLowerCase()));
+  // Match quarantine against a row's sessions, scoped to a coding agent.
+  // A session-scoped record matches only if one of the row's sessions is the
+  // offending session; an agent-wide record matches the whole (developer × agent).
+  const quarantineFor = (u, sessions, codingAgent) => {
+    const list = Array.isArray(sessions) ? sessions : [sessions];
+    const cands = new Set();
+    list.forEach((s) => [u, s.user_email, s.oauth_email,
+      (s.user_email || "").split("@")[0], (s.oauth_email || "").split("@")[0]]
+      .filter(Boolean).forEach((x) => cands.add(String(x).toLowerCase())));
+    const sessIds = new Set(list.map((s) => s.session_id).filter(Boolean));
     const agent = codingAgent || "claude-code";
     return qList.find((q) => {
       if ((q.codingAgent || "claude-code") !== agent) return false;
+      if (q.scope === "session" || q.sessionId) return sessIds.has(q.sessionId);
       const qu = String(q.osUser || "").toLowerCase();
       return cands.has(qu) || cands.has(qu.split("@")[0]);
     }) || null;
@@ -230,7 +235,7 @@ function deriveAll(s) {
     const stableSpiffe = firstNonEmpty("spiffe_id");  // SPIFFE/SVID: once issued, stays static for the lifecycle
     const trust = (s.trust[u] && s.trust[u].trust != null) ? s.trust[u].trust
       : (s.trust[latest.user_email] && s.trust[latest.user_email].trust != null) ? s.trust[latest.user_email].trust : 70;
-    const qRec = quarantineFor(u, latest, codingAgent);
+    const qRec = quarantineFor(u, sessions, codingAgent);
     const isQ = !!qRec;
     const capped = sessions.some((x) => cappedSessions.has(x.session_id));
     const state = isQ ? "Quarantined" : capped ? "Spawn-capped" : "Active";
@@ -1668,8 +1673,9 @@ function SessionsPanel({ row, terminated, embedded }) {
         {sessions.length === 0 && <div className="help" style={{ textAlign: "center", padding: 20 }}>No active sessions.</div>}
         {sessions.map((sx) => {
           const isTerm = termSet.has(sx.session_id);
-          // Prefer the session-level quarantine flag from the API; fall back to row state.
-          const isQ = !isTerm && (sx.quarantined || row.state === "Quarantined");
+          // Highlight ONLY the offending session — driven by the session-level
+          // flag from /api/sessions, never the whole row.
+          const isQ = !isTerm && !!sx.quarantined;
           const conn = sx.entrypoint === "remote" ? "Browser" : (sx.connection_type === "ssh" ? "SSH" : "Local");
           const os = sx.os_type || sx.remote_os || "";
           // JIT credentials for THIS session: prefer the API-joined list (carries

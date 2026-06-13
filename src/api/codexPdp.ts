@@ -241,7 +241,7 @@ router.post('/codex/evaluate', async (req, res) => {
       return denyCodex('This session has been terminated by an administrator. Please exit and start a new session to continue.');
     }
     if (isEnabled('quarantine_access')) {
-      const qRec = isQuarantined(user_email, CODING_AGENT);
+      const qRec = isQuarantined(user_email, CODING_AGENT, session_id);
       if (qRec) {
         console.log(`[CODEX:quarantine] tool blocked: ${user_email} via ${qRec.policyId}`);
         return denyCodex(qRec.message);
