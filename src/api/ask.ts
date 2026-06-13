@@ -21,6 +21,7 @@ import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-r
 import { sessionStore, decisionLog } from '../connector/discovery/enroll';
 import { listQuarantines } from './quarantine';
 import { listAllSVIDs } from './svid';
+import { DEMO_SEED_ENABLED, demoSessions, demoSvids, demoQuarantines, demoIdentities, demoInsights } from './demoSeed';
 
 const REGION = process.env.AWS_REGION || 'ap-southeast-1';
 const MODEL_ID = process.env.BEDROCK_MODEL_ID || 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
@@ -80,13 +81,48 @@ function buildSnapshot() {
     issued_at: s.issued_at, expires_at: s.expires_at,
   }));
 
-  return { generatedAt: new Date().toISOString(), sessions, decisions, quarantines, svids };
+  const snapshot: any = { generatedAt: new Date().toISOString(), sessions, decisions, quarantines, svids };
+
+  // Demo seed — AGENT-ONLY. Merged into the snapshot the model sees so it can
+  // answer about the demo identities, but never written to any shared store, so
+  // the dashboard and all /api endpoints stay on real data only.
+  if (DEMO_SEED_ENABLED) {
+    const compactSeedSession = (s: any) => ({
+      session_id: s.session_id, coding_agent: s.coding_agent,
+      access_surface: s.surface || s.entrypoint || null,
+      connection_type: s.connection_type || null, ssh_client_ip: s.ssh_client_ip || null,
+      os: s.os_type || s.remote_os || null, hostname: s.hostname || null, model: s.model || null,
+      project: s.project_name || null, git_branch: s.git_branch || null,
+      authenticated_oauth_email: s.oauth_email || s.user_email || null,
+      git_email: s.git_email || null, jira_assignee_email: s.jira_assignee_email || null,
+      account_uuid: s.account_uuid || null, org_uuid: s.org_uuid || null,
+      spiffe_id: s.spiffe_id || null, mcp_servers_discovered: s.mcp_servers_discovered || [],
+      enrolled_at: s.enrolled_at || null,
+    });
+    snapshot.sessions = [...snapshot.sessions, ...demoSessions.map(compactSeedSession)];
+    snapshot.svids = [...snapshot.svids, ...demoSvids.map((s: any) => ({
+      developer_email: s.developer_email, action: s.action, project: s.project,
+      spiffe_id: s.spiffe_id, issued_by: s.issued_by, status: s.status,
+      issued_at: s.issued_at, expires_at: s.expires_at,
+    }))];
+    snapshot.quarantines = [...snapshot.quarantines, ...demoQuarantines.map((q: any) => ({
+      osUser: q.osUser, policyId: q.policyId, policyName: q.policyName, reason: q.reason,
+      status: q.status, since: q.since, expiresAt: q.expiresAt ?? null,
+    }))];
+    // Per-identity governance profiles + environment aggregates (the authoritative
+    // decision ground truth for these identities — no individual rows fabricated).
+    snapshot.identities = demoIdentities;
+    snapshot.insights = demoInsights;
+  }
+
+  return snapshot;
 }
 
 const SYSTEM_PROMPT = `You are Reva AI, the AI Governance Assistant embedded in the Reva console for agentic workloads (Claude Code, Codex, Kiro). You help teams understand and manage how their AI agents are governed, using the LIVE governance data provided below.
 
 RULES:
 - Answer ONLY from the DATA snapshot. Never invent identities, sessions, decisions, or findings. If something is not in the data, do not assert it.
+- The DATA snapshot may include: "sessions", "decisions", "quarantines", "svids" (live), and — when present — "identities" (a per-developer×coding-agent governance profile: owner, model, trust, session count, JIT, decision/denial counts, deny-reason breakdown, surface insights) and "insights" (environment aggregates: permit/deny mix, usage by tool, totals). Treat "identities" and "insights" as authoritative; the per-identity decision/denial counts and deny reasons ARE the decision ground truth for those identities even without individual decision rows.
 - Reason across the data to answer questions about agentic workloads, access and policy decisions, identity and ownership, trust, behavioral anomalies, and quarantined access. Correlate across sessions, decisions, identity fields, time, and trace ids where it helps — e.g. access that no longer matches an identity, agents reaching scope outside their registered tools, activity diverging from declared intent, repeated policy denials, or credential/JIT use. Go beyond aggregate counts a dashboard already shows.
 - If the data is insufficient to answer, say so plainly in "summary" and return an empty "tables" array. Never fabricate rows to fill a table.
 - Respond with ONLY a single JSON object and nothing else (no prose, no markdown fences):
