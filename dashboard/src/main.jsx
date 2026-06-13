@@ -1668,11 +1668,17 @@ function SessionsPanel({ row, terminated, embedded }) {
         {sessions.length === 0 && <div className="help" style={{ textAlign: "center", padding: 20 }}>No active sessions.</div>}
         {sessions.map((sx) => {
           const isTerm = termSet.has(sx.session_id);
-          const isQ = !isTerm && row.state === "Quarantined";   // quarantine is per (developer × agent) = whole row
+          // Prefer the session-level quarantine flag from the API; fall back to row state.
+          const isQ = !isTerm && (sx.quarantined || row.state === "Quarantined");
           const conn = sx.entrypoint === "remote" ? "Browser" : (sx.connection_type === "ssh" ? "SSH" : "Local");
           const os = sx.os_type || sx.remote_os || "";
-          // JIT credentials earned by THIS session (incl. expired/revoked).
-          const sessJit = (row.jitAll || []).filter((j) => j.sessionId && j.sessionId === sx.session_id);
+          // JIT credentials for THIS session: prefer the API-joined list (carries
+          // state + legacy fallback), else derive from the row's agent-scoped list.
+          const sessJit = (sx.jit && sx.jit.length)
+            ? sx.jit
+            : (row.jitAll || []).filter((j) => j.sessionId && j.sessionId === sx.session_id);
+          const sessSvid = sx.spiffe_id || sx.svid || row.svid;
+          const qPolicy = sx.quarantine_policy || (row.quarantine && row.quarantine.policyName) || "isolation policy";
           const cardBg = isQ ? "var(--red-tint)" : "var(--surface-2)";
           const cardBorder = isQ ? "#F5C2C2" : "var(--border)";
           return (
@@ -1686,7 +1692,7 @@ function SessionsPanel({ row, terminated, embedded }) {
                   : <span className="pill pill-green" style={{ marginLeft: 4 }}><span className="dot" />Active</span>}
                 <span className="help" style={{ marginLeft: "auto" }}>{relTimeP(sx.enrolled_at)}</span>
               </div>
-              {isQ && <div style={{ fontSize: 12, color: "#B42318", marginTop: 6 }}>Access quarantined — {(row.quarantine && row.quarantine.policyName) || "isolation policy"}. Operations are blocked until access is restored.</div>}
+              {isQ && <div style={{ fontSize: 12, color: "#B42318", marginTop: 6, fontWeight: 600 }}>Access Quarantined — {qPolicy}. Operations are blocked until access is restored.</div>}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 9 }}>
                 {sx.entrypoint ? <span className="help">surface: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.entrypoint}</span></span> : null}
                 <span className="help">connection: <span className="mono" style={{ color: "var(--ink-2)" }}>{conn}</span></span>
@@ -1700,11 +1706,13 @@ function SessionsPanel({ row, terminated, embedded }) {
                 {sx.jira_ticket_id ? <span className="help">jira: <span className="mono" style={{ color: "var(--ink-2)" }}>{sx.jira_ticket_id}</span></span> : null}
               </div>
 
-              {/* Workload identity for this session */}
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--border)" }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.4px" }}>SPIFFE / SVID</div>
-                <div className="mono" style={{ fontSize: 11.5, color: "var(--ink-2)", marginTop: 3, wordBreak: "break-all" }}>{sx.spiffe_id || row.svid}</div>
-              </div>
+              {/* Workload identity (issued SVID) for this session */}
+              {sessSvid ? (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--border)" }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.4px" }}>Issued SVID</div>
+                  <div className="mono" style={{ fontSize: 11.5, color: "var(--ink-2)", marginTop: 3, wordBreak: "break-all" }}>{sessSvid}</div>
+                </div>
+              ) : null}
 
               {/* JIT credentials issued within this session */}
               {sessJit.length > 0 && (
