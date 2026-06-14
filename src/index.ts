@@ -118,32 +118,78 @@ import { getPIPContext } from './api/pip';
 import { sessionIntentStore } from './connector/hooks/beforePrompt';
 import { claudeSessionUserStore } from './connector/hooks/onSessionStart';
 
-// Dedupe file-content injection scans — one block per (session, file) so repeated
-// PostToolBatch posts don't crater trust for the same payload.
+// Dedupe file-content injection scans — one block per (session, file-set) so
+// repeated PostToolBatch posts don't crater trust for the same payload.
 const scannedFileInjections = new Set<string>();
 
-// Reva must detect injected content regardless of HOW an agent ingested it.
-// Coupling the scan to the Read tool let payloads through via Bash `cat`/`grep`
-// (tool_name is "Bash", so they were never scanned, and the path lives in
-// tool_input.command not file_path). This returns the response text + a source
-// label for any file-read — Read tool OR a Bash read command — so the same
-// injection classifier runs over all ingested file content.
-const FILE_READ_CMD = /\b(cat|head|tail|less|more|nl|strings|cut|sed|grep|egrep|fgrep|rg|awk|od|xxd)\b|\bgit\s+(show|diff|log)\b/;
-function extractIngestedContent(c: any): { content: string; src: string } | null {
+// Cumulative set of files where injection/jailbreak content was found, per session.
+// Drives the quarantine "Clipped Reason" so it names EVERY flagged file
+// (docs/setup.md, docs/CONTRIBUTING.md, …) instead of a coarse directory token.
+const injectedFilesBySession = new Map<string, Set<string>>();
+
+// Reva must detect injected content regardless of HOW an agent ingested it, and
+// must attribute it to the SPECIFIC files — not the directory it searched.
+//   Read        → tool_input.file_path
+//   Grep/Glob   → per-file paths live INSIDE the output ("docs/setup.md:12:…")
+//   Bash reads  → grep -r/cat/head/… aggregate output whose paths are in content
+// Earlier this took the first absolute-path token (the directory for `grep -r`),
+// which is why the reason showed the project folder, not setup.md/CONTRIBUTING.md.
+const FILE_READ_CMD = /\b(cat|head|tail|less|more|nl|strings|cut|sed|grep|egrep|fgrep|rg|awk|od|xxd|find)\b|\bgit\s+(show|diff|log)\b/;
+
+// Pull file paths out of aggregated read output (grep prefixes, head/tail headers,
+// bare path lines from glob / grep -l / find).
+function filesFromContent(content: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (p: string) => { const v = (p || '').trim(); if (v && !seen.has(v)) { seen.add(v); out.push(v); } };
+  for (const raw of content.split('\n')) {
+    const ln = raw.trim();
+    if (!ln) continue;
+    let m = ln.match(/^==>\s+(.+?)\s+<==$/);                 // head/tail: ==> path <==
+    if (m) { push(m[1]); continue; }
+    m = ln.match(/^([^\s:][^:]*?):(?:\d+:)?/);               // grep: path:line:… | path:…
+    if (m && (m[1].includes('/') || /\.[A-Za-z0-9]{1,8}$/.test(m[1]))) { push(m[1]); continue; }
+    if (ln.length < 240 && /^[~./]?[\w./@+-]+\.[A-Za-z0-9]{1,8}$/.test(ln)) push(ln); // bare path
+  }
+  return out;
+}
+
+// Path-like tokens from a shell command (the files being read), flags excluded.
+function pathsFromCommand(cmd: string): string[] {
+  const toks = cmd.match(/(?:\/|\.{1,2}\/|[\w.@+-]+\/)[^\s"'|>;&]*|\b[\w.@+-]+\.[A-Za-z0-9]{1,8}\b/g) || [];
+  return toks.filter((t) => !t.startsWith('-'));
+}
+
+function extractIngestedContent(c: any): { content: string; files: string[] } | null {
   const tool = c?.tool_name || '';
   const resp = typeof c?.tool_response === 'string' ? c.tool_response : '';
   if (!resp) return null;
   if (/^read/i.test(tool)) {
     const fp = c?.tool_input?.file_path || c?.tool_input?.path || '';
-    return { content: resp, src: fp || 'read' };
+    return { content: resp, files: fp ? [fp] : [] };
+  }
+  if (/^(grep|glob)$/i.test(tool)) {
+    const fromContent = filesFromContent(resp);
+    const hint = c?.tool_input?.path || c?.tool_input?.glob || c?.tool_input?.pattern || '';
+    return { content: resp, files: fromContent.length ? fromContent : (hint ? [hint] : []) };
   }
   if (/^bash$/i.test(tool)) {
     const cmd = typeof c?.tool_input?.command === 'string' ? c.tool_input.command : '';
     if (!cmd || !FILE_READ_CMD.test(cmd)) return null;
-    const m = cmd.match(/\/[^\s"'|>;&]+/);          // first absolute-path token
-    return { content: resp, src: (m && m[0]) || cmd.slice(0, 60) };
+    const fromContent = filesFromContent(resp);
+    return { content: resp, files: fromContent.length ? fromContent : pathsFromCommand(cmd) };
   }
   return null;
+}
+
+// Human-readable path: project-relative when under cwd, else trailing segments
+// (handles worktree copies and absolute paths).
+function relFile(cwd: string, p: string): string {
+  if (!p) return p;
+  const f = p.trim();
+  if (cwd && f.startsWith(cwd + '/')) return f.slice(cwd.length + 1);
+  if (f.startsWith('/')) return f.split('/').filter(Boolean).slice(-2).join('/');
+  return f.replace(/^\.\//, '');
 }
 app.post('/api/pdp/hook', async (req, res) => {
   const event = req.body?.hook_event_name || 'unknown';
@@ -184,11 +230,15 @@ app.post('/api/pdp/hook', async (req, res) => {
     const batchSI       = sessionIntentStore.get(session_id);
     const batchDeclared = batchSub?.declared_scope || batchSI?.prompt || '';
     const batchInitial  = batchSub?.initial_scope  || batchSI?.initial_scope || batchSI?.prompt || '';
+    const cwd = req.body?.cwd || '';
     for (const c of calls) {
       const ingested = extractIngestedContent(c);
       if (!ingested) continue;
-      const { content, src: fp } = ingested;
-      const dedupeKey = `${session_id}::${fp}`;
+      const { content, files: rawFiles } = ingested;
+      // Specific, project-relative files this read touched (deduped, readable).
+      const relFiles = Array.from(new Set(rawFiles.map((f) => relFile(cwd, f)).filter(Boolean)));
+      const fpLabel = relFiles[0] || relFile(cwd, cwd) || 'ingested content';
+      const dedupeKey = `${session_id}::${relFiles.join('|') || content.length}`;
       if (scannedFileInjections.has(dedupeKey)) continue;
 
       const result = classifyPrompt(content, session_id, user_email);
@@ -198,20 +248,33 @@ app.post('/api/pdp/hook', async (req, res) => {
 
       scannedFileInjections.add(dedupeKey);
       const detection = isInjection ? 'prompt_injection' : 'jailbreak_attempt';
+
+      // Accumulate ALL flagged files for this session, then build a comma-joined,
+      // capped list so the quarantine reason names every file (matching what the
+      // agent surfaces in-terminal) instead of a coarse directory.
+      const fileSet = injectedFilesBySession.get(session_id) || new Set<string>();
+      (relFiles.length ? relFiles : [fpLabel]).forEach((f) => fileSet.add(f));
+      injectedFilesBySession.set(session_id, fileSet);
+      const allFiles = Array.from(fileSet).sort();
+      const fileList = allFiles.length > 5
+        ? `${allFiles.slice(0, 5).join(', ')}, +${allFiles.length - 5} more`
+        : allFiles.join(', ');
+      const reasonText = `${detection} detected in ${fileList || fpLabel}`;
+
       recordBlock(user_email, {
         type: detection,
-        prompt: `read:${fp} — ${content.slice(0, 160)}`.slice(0, 200),
+        prompt: `read:${fpLabel} — ${content.slice(0, 160)}`.slice(0, 200),
         score: isInjection ? result.scores.injection_score : result.scores.jailbreak_score,
         timestamp: ts,
       });
 
       // Quarantine on detected injection (AAI-UAP-001), gated by the master
-      // switch — same as the prompt-level path, so injection caught in a tool
-      // result or ingested file quarantines the developer too.
+      // switch — re-clipping with the cumulative list updates the record so the
+      // dashboard shows every flagged file, not just the last one scanned.
       try {
         if (require('./api/securityConfig').isEnabled('quarantine_access')) {
           const ca = require('./connector/discovery/enroll').sessionStore.get(session_id)?.coding_agent || 'claude-code';
-          require('./api/quarantine').clip({ osUser: user_email, codingAgent: ca, sessionId: session_id, policyId: 'AAI-UAP-001', reason: `${detection} detected in ${fp}` });
+          require('./api/quarantine').clip({ osUser: user_email, codingAgent: ca, sessionId: session_id, policyId: 'AAI-UAP-001', reason: reasonText });
         }
       } catch (e) { /* never break the scan */ }
 
@@ -233,7 +296,7 @@ app.post('/api/pdp/hook', async (req, res) => {
           parentSessionId: session_id,
           declaredScope:   batchDeclared,
           initialScope:    batchInitial,
-          sourcePath:      fp,
+          sourcePath:      fpLabel,
           pipCtx:          batchPip,
         });
         cedarResult = await evaluateCedar(injPayload);
@@ -249,7 +312,7 @@ app.post('/api/pdp/hook', async (req, res) => {
         server:       'claude-code',
         sensitivity:  result.sensitivity,
         effect:       cedarResult && cedarResult.decision === 'allow' ? 'Permit' : 'Deny',
-        reason:       (cedarResult && cedarResult.policy_name) || `${detection} in file ${fp}`,
+        reason:       (cedarResult && cedarResult.policy_name) || reasonText,
         intent:       'prompt_injection_in_read',
         trust_score:  getPersistentTrust(user_email),
         scores:       result.scores,
@@ -257,7 +320,7 @@ app.post('/api/pdp/hook', async (req, res) => {
         agent_type:   batchAgentKind,
         ...cedarFields(injPayload || {}),
       });
-      console.log(`[FileInjection] ${detection} in ${fp} session=${session_id} score=${result.scores.injection_score} decision=${cedarResult?.decision ?? 'error'} trust=${getPersistentTrust(user_email)}`);
+      console.log(`[FileInjection] ${detection} in ${fileList || fpLabel} session=${session_id} score=${result.scores.injection_score} decision=${cedarResult?.decision ?? 'error'} trust=${getPersistentTrust(user_email)}`);
     }
   }
 
