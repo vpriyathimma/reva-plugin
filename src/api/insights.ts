@@ -75,8 +75,8 @@ function userKey(email: string): string { return (email || '').includes('@') ? e
 // Identity key — mirrors the dashboard's osUserOf(): prefer the developer's name,
 // then the email local-part, then user_id. Keeps roster ids identical to the UI.
 function osUserOf(sess: EnrolledSession): string {
-  return (sess.developer_name && sess.developer_name.trim())
-    || (sess.user_email ? sess.user_email.split('@')[0] : '')
+ return (sess.user_email ? sess.user_email.split('@')[0] : '')
+    || (sess.developer_name && sess.developer_name.trim())
     || sess.user_id || 'developer';
 }
 
