@@ -194,7 +194,7 @@ function relFile(cwd: string, p: string): string {
 app.post('/api/pdp/hook', async (req, res) => {
   const event = req.body?.hook_event_name || 'unknown';
   const session_id = req.body?.session_id || '';
-  const user_email = req.body?.env?.USER || claudeSessionUserStore.get(session_id) || (req.headers['x-os-user'] as string) || '';
+  const user_email = req.body?.env?.USER || req.body?.env?.USERNAME || claudeSessionUserStore.get(session_id) || (req.headers['x-os-user'] as string) || (req.headers['x-os-username'] as string) || '';
   const ts = new Date().toISOString();
 
   // Full body — no truncation (per-agent id / lifecycle payload investigation)
