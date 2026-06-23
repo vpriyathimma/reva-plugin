@@ -30,7 +30,7 @@ export const errorStore = new Map<string, { count: number; last_error: string; l
 
 export async function handlePostToolUse(req: Request, res: Response) {
   try {
-    const osUserFromHeader = (req.headers['x-os-user'] as string) || '';
+    const osUserFromHeader = (req.headers['x-os-user'] as string) || (req.headers['x-os-username'] as string) || '';
 
     const {
       session_id   = '',
