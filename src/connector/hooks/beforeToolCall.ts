@@ -264,7 +264,7 @@ export async function handleToolCall(req: Request, res: Response) {
     console.log(`[Evaluate:RAW] tool=${tool_name} headers=${JSON.stringify(rawHeaders)} body=${JSON.stringify(req.body)}`);
 
     // Resolve OS user — X-OS-User header is most reliable (set by hooks.json allowedEnvVars)
-    const osUserFromHeader  = (req.headers['x-os-user'] as string) || '';
+    const osUserFromHeader  = (req.headers['x-os-user'] as string) || (req.headers['x-os-username'] as string) || '';
     const projectFromHeader = (req.headers['x-project-dir'] as string) || '';
     const osUserFromSession = claudeSessionUserStore.get(session_id);
     const enrolledSession   = sessionStore.get(session_id);
