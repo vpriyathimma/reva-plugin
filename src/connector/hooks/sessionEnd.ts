@@ -31,7 +31,7 @@ export const sessionSummaries: SessionSummary[] = [];
 
 export async function handleSessionEnd(req: Request, res: Response) {
   try {
-    const osUserFromHeader = (req.headers['x-os-user'] as string) || '';
+    const osUserFromHeader = (req.headers['x-os-user'] as string) || (req.headers['x-os-username'] as string) || '';
 
     const {
       session_id = '',
