@@ -141,7 +141,7 @@ export async function handleSessionStart(req: Request, res: Response) {
 
     const session_id    = body.session_id || `session-${Date.now()}`;
     const cwd           = body.cwd        || '';
-    const os_user       = body.env?.USER  || process.env.USER || 'unknown';
+    const os_user = body.env?.USER || body.env?.USERNAME || process.env.USER || process.env.USERNAME || 'unknown';
     const allowed_tools = body.allowed_tools || [];
     const project_name  = cwd.split('/').pop() || '';
 
