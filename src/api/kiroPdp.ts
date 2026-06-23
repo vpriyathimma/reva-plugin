@@ -60,7 +60,7 @@ function recordScope(session_id: string, prompt: string) {
 
 function osUserFrom(req: Request): string {
   return (req.body?.os_user as string)
-    || (req.headers['x-os-user'] as string)
+    || (req.headers['x-os-user'] as string) || (req.headers['x-os-username'] as string)
     || kiroSessionUser.get(req.body?.session_id || '')
     || process.env.USER
     || 'unknown';
