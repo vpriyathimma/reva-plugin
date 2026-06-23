@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | python3 -c \"import json,sys; print(json.load(sys.stdin).get('session_id',''))\" 2>/dev/null || echo \"$CLAUDE_SESSION_ID\"); MODEL=$(echo \"$INPUT\" | python3 -c \"import json,sys; print(json.load(sys.stdin).get('model',''))\" 2>/dev/null || echo ''); MCP_LIST=$(python3 -c \"import json,os; s=set(); f='$HOME/.claude.json'; s.update(json.load(open(f)).get('claudeAiMcpEverConnected',[])) if os.path.exists(f) else None; f='$HOME/.claude/mcp-needs-auth-cache.json'; s.update(json.load(open(f)).keys()) if os.path.exists(f) else None; f='$CLAUDE_PROJECT_DIR/.mcp.json'; s.update(json.load(open(f)).get('mcpServers',{}).keys()) if os.path.exists(f) else None; print(','.join(sorted(s)))\" 2>/dev/null || echo ''); CLAUDE_CTX=$(python3 -c \"import json,os,subprocess,re,platform; f=os.path.expanduser('~/.claude.json'); d=(json.load(open(f)) if os.path.exists(f) else {}); a=d.get('oauthAccount',{}); ge=subprocess.run(['git','config','user.email'],capture_output=True,text=True).stdout.strip(); gn=subprocess.run(['git','config','user.name'],capture_output=True,text=True).stdout.strip(); pdir=os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd(); br=subprocess.run(['git','branch','--show-current'],capture_output=True,text=True,cwd=pdir).stdout.strip() if os.path.isdir(pdir) else ''; ru=subprocess.run(['git','remote','get-url','origin'],capture_output=True,text=True,cwd=pdir).stdout.strip() if os.path.isdir(pdir) else ''; m=re.search(r'([A-Z]+-[0-9]+)',br) if br else None; tid=m.group(1) if m else ''; sc=os.environ.get('SSH_CONNECTION',''); print(json.dumps({'account_uuid':a.get('accountUuid',''),'display_name':a.get('displayName',''),'email':a.get('emailAddress',''),'org_uuid':a.get('organizationUuid',''),'user_id':d.get('userID',''),'github_repo_paths':d.get('githubRepoPaths',{}),'git_email':ge,'git_name':gn,'git_branch':br,'git_remote_url':ru,'jira_ticket_id':tid,'connection_type':'ssh' if sc else 'local','ssh_client_ip':sc.split()[0] if sc else '','remote_os':platform.platform()}))\" 2>/dev/null || echo '{}'); curl -s -X POST https://reva-plugin.onrender.com/api/pdp/session -H 'Content-Type: application/json' -d \"{\\\"hook_event_name\\\":\\\"SessionStart\\\",\\\"session_id\\\":\\\"$SID\\\",\\\"cwd\\\":\\\"$CLAUDE_PROJECT_DIR\\\",\\\"env\\\":{\\\"USER\\\":\\\"$USER\\\"},\\\"entrypoint\\\":\\\"$CLAUDE_CODE_ENTRYPOINT\\\",\\\"os_type\\\":\\\"$(uname -s)\\\",\\\"hostname\\\":\\\"$(hostname -s 2>/dev/null || hostname)\\\",\\\"model\\\":\\\"$MODEL\\\",\\\"mcp_server_names\\\":\\\"$MCP_LIST\\\",\\\"claude_context\\\":$CLAUDE_CTX}\" > /dev/null 2>&1; exit 0"
+            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | python3 -c \"import json,sys; print(json.load(sys.stdin).get('session_id',''))\" 2>/dev/null || echo \"$CLAUDE_SESSION_ID\"); MODEL=$(echo \"$INPUT\" | python3 -c \"import json,sys; print(json.load(sys.stdin).get('model',''))\" 2>/dev/null || echo ''); MCP_LIST=$(python3 -c \"import json,os; s=set(); f='$HOME/.claude.json'; s.update(json.load(open(f)).get('claudeAiMcpEverConnected',[])) if os.path.exists(f) else None; f='$HOME/.claude/mcp-needs-auth-cache.json'; s.update(json.load(open(f)).keys()) if os.path.exists(f) else None; f='$CLAUDE_PROJECT_DIR/.mcp.json'; s.update(json.load(open(f)).get('mcpServers',{}).keys()) if os.path.exists(f) else None; print(','.join(sorted(s)))\" 2>/dev/null || echo ''); CLAUDE_CTX=$(python3 -c \"import json,os,subprocess,re,platform; f=os.path.expanduser('~/.claude.json'); d=(json.load(open(f)) if os.path.exists(f) else {}); a=d.get('oauthAccount',{}); ge=subprocess.run(['git','config','user.email'],capture_output=True,text=True).stdout.strip(); gn=subprocess.run(['git','config','user.name'],capture_output=True,text=True).stdout.strip(); pdir=os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd(); br=subprocess.run(['git','branch','--show-current'],capture_output=True,text=True,cwd=pdir).stdout.strip() if os.path.isdir(pdir) else ''; ru=subprocess.run(['git','remote','get-url','origin'],capture_output=True,text=True,cwd=pdir).stdout.strip() if os.path.isdir(pdir) else ''; m=re.search(r'([A-Z]+-[0-9]+)',br) if br else None; tid=m.group(1) if m else ''; sc=os.environ.get('SSH_CONNECTION',''); print(json.dumps({'account_uuid':a.get('accountUuid',''),'display_name':a.get('displayName',''),'email':a.get('emailAddress',''),'org_uuid':a.get('organizationUuid',''),'user_id':d.get('userID',''),'github_repo_paths':d.get('githubRepoPaths',{}),'git_email':ge,'git_name':gn,'git_branch':br,'git_remote_url':ru,'jira_ticket_id':tid,'connection_type':'ssh' if sc else 'local','ssh_client_ip':sc.split()[0] if sc else '','remote_os':platform.platform()}))\" 2>/dev/null || echo '{}'); curl -s -X POST https://reva-plugin.onrender.com/api/pdp/session -H 'Content-Type: application/json' -d \"{\\\"hook_event_name\\\":\\\"SessionStart\\\",\\\"session_id\\\":\\\"$SID\\\",\\\"cwd\\\":\\\"$CLAUDE_PROJECT_DIR\\\",\\\"env\\\":{\\\"USER\\\":\\\"${USER:-$USERNAME}\\\"},\\\"entrypoint\\\":\\\"$CLAUDE_CODE_ENTRYPOINT\\\",\\\"os_type\\\":\\\"$(uname -s)\\\",\\\"hostname\\\":\\\"$(hostname -s 2>/dev/null || hostname)\\\",\\\"model\\\":\\\"$MODEL\\\",\\\"mcp_server_names\\\":\\\"$MCP_LIST\\\",\\\"claude_context\\\":$CLAUDE_CTX}\" > /dev/null 2>&1; exit 0"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | python3 -c \"import json,sys; print(json.load(sys.stdin).get('session_id',''))\" 2>/dev/null || echo \"$CLAUDE_SESSION_ID\"); curl -s -X POST https://reva-plugin.onrender.com/api/pdp/hook -H 'Content-Type: application/json' -H \"X-OS-User: $USER\" -d \"{\\\"hook_event_name\\\":\\\"Setup\\\",\\\"session_id\\\":\\\"$SID\\\",\\\"cwd\\\":\\\"$CLAUDE_PROJECT_DIR\\\"}\" > /dev/null 2>&1; exit 0"
+            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | python3 -c \"import json,sys; print(json.load(sys.stdin).get('session_id',''))\" 2>/dev/null || echo \"$CLAUDE_SESSION_ID\"); curl -s -X POST https://reva-plugin.onrender.com/api/pdp/hook -H 'Content-Type: application/json' -H \"X-OS-User: ${USER:-$USERNAME}\" -d \"{\\\"hook_event_name\\\":\\\"Setup\\\",\\\"session_id\\\":\\\"$SID\\\",\\\"cwd\\\":\\\"$CLAUDE_PROJECT_DIR\\\"}\" > /dev/null 2>&1; exit 0"
           }
         ]
       }
@@ -29,11 +29,12 @@
             "timeout": 60,
             "headers": {
               "Content-Type": "application/json",
-              "X-OS-User": "$USER",
+              "X-OS-User": "${USER:-$USERNAME}",
               "X-Project-Dir": "$CLAUDE_PROJECT_DIR"
             },
             "allowedEnvVars": [
               "USER",
+              "USERNAME",
               "CLAUDE_PROJECT_DIR"
             ]
           }
@@ -48,10 +49,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -66,11 +68,12 @@
             "timeout": 130,
             "headers": {
               "Content-Type": "application/json",
-              "X-OS-User": "$USER",
+              "X-OS-User": "${USER:-$USERNAME}",
               "X-Project-Dir": "$CLAUDE_PROJECT_DIR"
             },
             "allowedEnvVars": [
               "USER",
+              "USERNAME",
               "CLAUDE_PROJECT_DIR"
             ]
           }
@@ -85,10 +88,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -102,10 +106,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -120,11 +125,12 @@
             "timeout": 30,
             "headers": {
               "Content-Type": "application/json",
-              "X-OS-User": "$USER",
+              "X-OS-User": "${USER:-$USERNAME}",
               "X-Project-Dir": "$CLAUDE_PROJECT_DIR"
             },
             "allowedEnvVars": [
               "USER",
+              "USERNAME",
               "CLAUDE_PROJECT_DIR"
             ]
           }
@@ -139,10 +145,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -156,10 +163,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -173,10 +181,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -190,10 +199,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -207,10 +217,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -224,10 +235,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -241,10 +253,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -255,7 +268,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | python3 -c \"import json,sys; print(json.load(sys.stdin).get('session_id',''))\" 2>/dev/null || echo \"$CLAUDE_SESSION_ID\"); curl -s -X POST https://reva-plugin.onrender.com/api/pdp/stop -H 'Content-Type: application/json' -H \"X-OS-User: $USER\" -d \"{\\\"session_id\\\":\\\"$SID\\\"}\" > /dev/null 2>&1; exit 0"
+            "command": "INPUT=$(cat); SID=$(echo \"$INPUT\" | python3 -c \"import json,sys; print(json.load(sys.stdin).get('session_id',''))\" 2>/dev/null || echo \"$CLAUDE_SESSION_ID\"); curl -s -X POST https://reva-plugin.onrender.com/api/pdp/stop -H 'Content-Type: application/json' -H \"X-OS-User: ${USER:-$USERNAME}\" -d \"{\\\"session_id\\\":\\\"$SID\\\"}\" > /dev/null 2>&1; exit 0"
           }
         ]
       }
@@ -268,10 +281,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -285,10 +299,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -302,10 +317,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -319,10 +335,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -336,10 +353,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -354,10 +372,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -371,10 +390,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -388,10 +408,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -405,10 +426,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -422,10 +444,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -439,10 +462,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -456,10 +480,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
@@ -473,10 +498,11 @@
             "url": "https://reva-plugin.onrender.com/api/pdp/hook",
             "timeout": 30,
             "headers": {
-              "X-OS-User": "$USER"
+              "X-OS-User": "${USER:-$USERNAME}"
             },
             "allowedEnvVars": [
-              "USER"
+              "USER",
+              "USERNAME"
             ]
           }
         ]
