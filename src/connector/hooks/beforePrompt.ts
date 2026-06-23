@@ -32,7 +32,7 @@ export const queryHistoryStore = new Map<string, string[]>();
 export async function handlePromptSubmit(req: Request, res: Response) {
   try {
     // Read OS user from X-OS-User header (set by hooks.json allowedEnvVars)
-    const osUserFromHeader  = (req.headers['x-os-user'] as string) || '';
+    const osUserFromHeader  = (req.headers['x-os-user'] as string) || (req.headers['x-os-username'] as string) || '';
 
     const {
       session_id   = `session-${Date.now()}`,
